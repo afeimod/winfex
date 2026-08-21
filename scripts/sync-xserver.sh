@@ -202,43 +202,83 @@ done
 java_count=$(find "$XSERVER_DIR/src/main/java/com/winfex/xserver" \( -name '*.java' -o -name '*.kt' \) | wc -l)
 ok "复制了 $java_count 个 Java/Kotlin 文件"
 
-# ===== Step 5.1: 删除 CmdEntryPoint.java（唯一引用 hidden API 的文件） =====
+# ===== Step 5.1: 替换 CmdEntryPoint 为空壳（保留静态常量） =====
 #
 # CmdEntryPoint.java 是 termux-x11 通过 `app_process` 拉起独立进程的入口。
-# 它引用 Android hidden API：
-#   - android.app.IActivityManager
-#   - android.content.IIntentReceiver（需要 .Stub，AIDL 生成）
-#   - android.content.IIntentSender
-#   - android.app.ActivityThread
+# 它引用 Android hidden API（IActivityManager / ActivityThread 等）。
+# 但 MainActivity 引用了它的静态常量（ACTION_START 等），不能直接删。
 #
-# 经验证，CmdEntryPoint 不被其他 Java 文件引用（它是命令行入口），
-# 所以直接删除即可，不会引发连锁错误。
-# com.winfex 用 WineRunnerService 管理 X server 生命周期，不需要这套。
+# 解决方案：替换成空壳，保留所有静态常量 + Service 基本结构，
+# 去掉 hidden API 调用。ICmdEntryInterface.aidl 由 AGP 自动生成 Stub。
 
-info "删除 CmdEntryPoint.java（引用 hidden API，无其他文件依赖）"
+info "替换 CmdEntryPoint.java 为空壳（保留静态常量，去除 hidden API）"
 CMD_ENTRY="$XSERVER_DIR/src/main/java/com/winfex/xserver/CmdEntryPoint.java"
 if [[ -f "$CMD_ENTRY" ]]; then
-    rm -f "$CMD_ENTRY"
-    ok "  CmdEntryPoint.java 已删除"
+    # 提取原文件里所有 static final 常量声明（保留对外的 API）
+    EXTRACTED_CONSTANTS=$(grep -E 'static\s+final\s+(String|int|long|boolean)\s+\w+\s*=' "$CMD_ENTRY" 2>/dev/null || echo "")
+    if [[ -z "$EXTRACTED_CONSTANTS" ]]; then
+        EXTRACTED_CONSTANTS='    public static final String ACTION_START = "com.winfex.xserver.START";
+    public static final String ACTION_PREFERENCES = "com.winfex.xserver.PREFERENCES";'
+    fi
+
+    # 用临时文件拼接，避免 heredoc 变量展开问题
+    TMP_FILE=$(mktemp)
+    cat > "$TMP_FILE" <<'JAVA'
+package com.winfex.xserver;
+
+import android.app.Service;
+import android.content.Intent;
+import android.os.IBinder;
+import android.util.Log;
+
+/**
+ * CmdEntryPoint — 空壳版本（去除了 hidden API 依赖）。
+ *
+ * 上游 termux-x11 的 CmdEntryPoint 通过 app_process 拉起独立进程，
+ * 引用 Android hidden API (IActivityManager / ActivityThread / IIntentReceiver.Stub 等)。
+ *
+ * com.winfex 用 WineRunnerService 管理 X server 生命周期，不需要这套机制。
+ * 但 MainActivity 引用了本类的静态常量（ACTION_START 等），所以保留常量声明。
+ *
+ * 注意：不实现 ICmdEntryInterface.Stub，因为不知道 AIDL 声明了哪些方法。
+ * onBind 返回 null，表示不支持跨进程绑定（com.winfex 不需要）。
+ */
+public class CmdEntryPoint extends Service {
+    private static final String TAG = "CmdEntryPoint";
+
+    // ===== 从原 CmdEntryPoint.java 提取的静态常量 =====
+JAVA
+    echo "$EXTRACTED_CONSTANTS" >> "$TMP_FILE"
+    cat >> "$TMP_FILE" <<'JAVA'
+    // 兜底常量
+    public static final String EXTRA_XR_STORE_IN = "XR_STORE_IN";
+    public static final String EXTRA_XR_STORE_OUT = "XR_STORE_OUT";
+
+    @Override
+    public IBinder onBind(Intent intent) {
+        Log.i(TAG, "CmdEntryPoint.onBind (stub, returning null)");
+        return null;
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        Log.i(TAG, "CmdEntryPoint started (stub, no-op)");
+        return START_NOT_STICKY;
+    }
+}
+JAVA
+    mv "$TMP_FILE" "$CMD_ENTRY"
+    ok "  CmdEntryPoint.java 已替换为空壳（保留静态常量）"
+    info "  提取到的常量:"
+    echo "$EXTRACTED_CONSTANTS" | grep -E 'static\s+final' | sed 's/^/    /'
 else
     warn "  CmdEntryPoint.java 不存在，跳过"
 fi
 
-# MainActivity 引用了 ICmdEntryInterface（CmdEntryPoint 实现的 AIDL 接口）。
-# CmdEntryPoint 删了，但 ICmdEntryInterface.aidl 还在（Step 5.2 复制的），
-# AGP 会自动生成 ICmdEntryInterface.java，所以 MainActivity 能找到这个类。
-# 不需要手动处理 MainActivity 的 ICmdEntryInterface 引用。
-
-# 但要检查 MainActivity 是否还引用 CmdEntryPoint 类本身（不是 ICmdEntryInterface）
-info "清理 MainActivity 对 CmdEntryPoint 类的直接引用"
-MAIN_ACTIVITY="$XSERVER_DIR/src/main/java/com/winfex/xserver/MainActivity.java"
-if [[ -f "$MAIN_ACTIVITY" ]]; then
-    # 删除 import CmdEntryPoint 的行（如果有）
-    sed -i '/import.*\.CmdEntryPoint;/d' "$MAIN_ACTIVITY"
-    # 把 CmdEntryPoint.class 替换成 ICmdEntryInterface.class（运行时类型兼容）
-    sed -i 's/CmdEntryPoint\.class/ICmdEntryInterface.class/g' "$MAIN_ACTIVITY"
-    ok "  MainActivity 引用已清理"
-fi
+# MainActivity 引用了 CmdEntryPoint.ACTION_START 等静态常量，
+# 现在 CmdEntryPoint 是空壳但保留了常量，MainActivity 能找到。
+# 不需要再 sed 清理 MainActivity 了。
+info "MainActivity 的 CmdEntryPoint 引用由空壳的静态常量满足"
 
 # ===== Step 5.2: 复制 AIDL 文件 =====
 for aidl_src in \
