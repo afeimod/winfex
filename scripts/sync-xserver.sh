@@ -385,6 +385,16 @@ else
         cnt=$(find "$d" -type f | wc -l)
         echo "    $(basename "$d"): $cnt 个文件"
     done
+
+    # ===== Step 8.1: 对新复制的 res 文件再做一次包名替换 =====
+    # 因为 Step 6 在 Step 8 之前执行，新复制的 XML 里的 com.termux.x11 没被替换。
+    # 这里补一次，覆盖 layout/values/anim/xml 等所有 res 文件。
+    info "对新复制的 res 文件做包名替换"
+    find "$XSERVER_DIR/src/main/res" -type f \( -name '*.xml' -o -name '*.java' \) \
+        -exec sed -i 's/com\.termux\.x11/com.winfex.xserver/g' {} + 2>/dev/null || true
+    find "$XSERVER_DIR/src/main/res" -type f \( -name '*.xml' -o -name '*.java' \) \
+        -exec sed -i 's@com/termux/x11@com/winfex/xserver@g' {} + 2>/dev/null || true
+    ok "  res 文件包名替换完成"
 fi
 
 # ===== Step 9: 重写 xserver/build.gradle.kts =====
