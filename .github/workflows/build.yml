@@ -108,7 +108,8 @@ jobs:
           echo "- recipes: $(ls xserver/src/main/cpp/recipes/ 2>/dev/null | wc -l)"
           echo "- AIDL: $(find xserver/src/main/aidl -name '*.aidl' 2>/dev/null | wc -l)"
           echo "- Java files: $(find xserver/src/main/java -name '*.java' -o -name '*.kt' 2>/dev/null | wc -l)"
-          echo "- stub files: $(find xserver/src/main/java/com/winfex/xserver/stub -name '*.java' 2>/dev/null | wc -l)"
+          echo "- CmdEntryPoint exists: $([ -f xserver/src/main/java/com/winfex/xserver/CmdEntryPoint.java ] && echo 'yes (should be deleted)' || echo 'no (good)')"
+          echo "- Prefs: $(find xserver/src/main/java -name 'Prefs.*' 2>/dev/null | head -1)"
 
       - name: Generate Gradle wrapper
         run: gradle wrapper --gradle-version ${{ env.GRADLE_VERSION }} --distribution-type bin

@@ -172,58 +172,81 @@ done
 
 ok "cpp 源码复制完成"
 
-# ===== Step 5: 复制 Java 源码 =====
+# ===== Step 5: 复制 Java 源码（全部保留） =====
 #
-# termux-x11 的 Java 层包含：
-#   - LorieView.java           ← 必需，SurfaceView 渲染 X server 画面 + JNI 桥
-#   - TouchInputHandler.java   ← 必需，触摸→鼠标/键盘手势
-#   - input/*.java             ← 必需，输入事件分发
-#   - MainActivity.java        ← ❌ 删除，引用大量 hidden API + Prefs.kt
-#   - CmdEntryPoint.java       ← ❌ 删除，引用 hidden API (IActivityManager 等)
-#   - LoriePreferences.java    ← ❌ 删除，引用 PreferenceDataStore + Prefs.kt
-#   - Prefs.kt                 ← ❌ 删除（如果有），用我们的 stub 代替
+# 策略：保留 termux-x11 所有 Java/Kotlin 文件原样，包括：
+#   - MainActivity.java        ← X Server 主 Activity
+#   - LoriePreferences.java    ← 设置页
+#   - LorieView.java           ← SurfaceView + JNI
+#   - TouchInputHandler.java   ← 触摸手势
+#   - InputEventSender.java    ← X11 事件发送
+#   - Prefs.kt                 ← 偏好设置包装（PreferenceDataStore）
+#   - utils/*, extrakeys/*     ← 工具类
+#   - CmdEntryPoint.java       ← 独立进程入口（引用 hidden API，单独 stub）
 #
-# com.winfex 不需要 termux-x11 的 Activity/Preferences/CmdEntry，
-# 因为我们有自己的 XServerManager + WineRunnerService + XServerActivity(stub)。
-# 只需要 LorieView + 输入处理 + native 代码。
+# 这些文件互相依赖，删任何一个都会导致连锁错误。
+# 正确做法是全部保留 + 对 CmdEntryPoint 的 hidden API 生成 stub。
 
 info "复制 Lorie Java 源码到 xserver/src/main/java/com/winfex/xserver/"
 mkdir -p "$XSERVER_DIR/src/main/java/com/winfex/xserver"
 rm -f "$XSERVER_DIR/src/main/java/com/winfex/xserver/"*.kt
 rm -f "$XSERVER_DIR/src/main/java/com/winfex/xserver/"*.java
 
-# 不复制的文件列表（会导致编译失败的 termux-x11 专属代码）
-SKIP_FILES="MainActivity.java CmdEntryPoint.java LoriePreferences.java Prefs.java Prefs.kt"
-
 find "$LORIE_JAVA_SRC" \( -name '*.java' -o -name '*.kt' \) | while read -r f; do
     rel="${f#$LORIE_JAVA_SRC/}"
-    # 跳过不需要的文件
-    skip=false
-    for skip_file in $SKIP_FILES; do
-        if [[ "$(basename "$f")" == "$skip_file" ]]; then
-            skip=true
-            break
-        fi
-    done
-    if $skip; then
-        info "  跳过: $rel (依赖 hidden API / Prefs.kt)"
-        continue
-    fi
     dst="$XSERVER_DIR/src/main/java/com/winfex/xserver/$rel"
     mkdir -p "$(dirname "$dst")"
     cp "$f" "$dst"
 done
 
-# 复制 AIDL 文件（termux-x11 用 ICmdEntryInterface.aidl 跨进程通信）
-# 即使删了 CmdEntryPoint.java，AIDL 也可以保留（不影响编译，将来可能用到）
-info "复制 AIDL 文件"
+java_count=$(find "$XSERVER_DIR/src/main/java/com/winfex/xserver" \( -name '*.java' -o -name '*.kt' \) | wc -l)
+ok "复制了 $java_count 个 Java/Kotlin 文件"
+
+# ===== Step 5.1: 删除 CmdEntryPoint.java（唯一引用 hidden API 的文件） =====
+#
+# CmdEntryPoint.java 是 termux-x11 通过 `app_process` 拉起独立进程的入口。
+# 它引用 Android hidden API：
+#   - android.app.IActivityManager
+#   - android.content.IIntentReceiver（需要 .Stub，AIDL 生成）
+#   - android.content.IIntentSender
+#   - android.app.ActivityThread
+#
+# 经验证，CmdEntryPoint 不被其他 Java 文件引用（它是命令行入口），
+# 所以直接删除即可，不会引发连锁错误。
+# com.winfex 用 WineRunnerService 管理 X server 生命周期，不需要这套。
+
+info "删除 CmdEntryPoint.java（引用 hidden API，无其他文件依赖）"
+CMD_ENTRY="$XSERVER_DIR/src/main/java/com/winfex/xserver/CmdEntryPoint.java"
+if [[ -f "$CMD_ENTRY" ]]; then
+    rm -f "$CMD_ENTRY"
+    ok "  CmdEntryPoint.java 已删除"
+else
+    warn "  CmdEntryPoint.java 不存在，跳过"
+fi
+
+# MainActivity 引用了 ICmdEntryInterface（CmdEntryPoint 实现的 AIDL 接口）。
+# CmdEntryPoint 删了，但 ICmdEntryInterface.aidl 还在（Step 5.2 复制的），
+# AGP 会自动生成 ICmdEntryInterface.java，所以 MainActivity 能找到这个类。
+# 不需要手动处理 MainActivity 的 ICmdEntryInterface 引用。
+
+# 但要检查 MainActivity 是否还引用 CmdEntryPoint 类本身（不是 ICmdEntryInterface）
+info "清理 MainActivity 对 CmdEntryPoint 类的直接引用"
+MAIN_ACTIVITY="$XSERVER_DIR/src/main/java/com/winfex/xserver/MainActivity.java"
+if [[ -f "$MAIN_ACTIVITY" ]]; then
+    # 删除 import CmdEntryPoint 的行（如果有）
+    sed -i '/import.*\.CmdEntryPoint;/d' "$MAIN_ACTIVITY"
+    # 把 CmdEntryPoint.class 替换成 ICmdEntryInterface.class（运行时类型兼容）
+    sed -i 's/CmdEntryPoint\.class/ICmdEntryInterface.class/g' "$MAIN_ACTIVITY"
+    ok "  MainActivity 引用已清理"
+fi
+
+# ===== Step 5.2: 复制 AIDL 文件 =====
 for aidl_src in \
     "$TERMUX_X11_DIR/app/src/main/aidl" \
     "$TERMUX_X11_DIR/lorie/src/main/aidl"; do
     if [[ -d "$aidl_src" ]]; then
         mkdir -p "$XSERVER_DIR/src/main/aidl"
         cp -r "$aidl_src/"* "$XSERVER_DIR/src/main/aidl/" 2>/dev/null || true
-        # 包名替换
         if [[ -d "$XSERVER_DIR/src/main/aidl/com/termux/x11" ]]; then
             mkdir -p "$XSERVER_DIR/src/main/aidl/com/winfex"
             mv "$XSERVER_DIR/src/main/aidl/com/termux/x11" \
@@ -234,8 +257,6 @@ for aidl_src in \
         break
     fi
 done
-
-ok "Java 源码复制完成（已跳过 $(echo $SKIP_FILES | wc -w) 个有问题的文件）"
 
 # ===== Step 6: 全局替换包名 =====
 
@@ -329,10 +350,11 @@ android {
             }
         }
 
-        // termux-x11 的 CmdEntryPoint.java 引用 BuildConfig.COMMIT
+        // termux-x11 的 Java 代码引用 BuildConfig.COMMIT / APPLICATION_ID
         // 注意：buildConfigField 对 String 类型，值必须含双引号（AGP 不会自动加）
         buildConfigField("String", "COMMIT", "\"unknown-synced\"")
         buildConfigField("String", "VERSION_NAME", "\"0.4.2\"")
+        buildConfigField("String", "APPLICATION_ID", "\"com.winfex.xserver\"")
     }
 
     buildFeatures {
@@ -411,35 +433,28 @@ GRADLE
 
 ok "build.gradle.kts 已更新（含完整依赖）"
 
-# ===== Step 9.1: 生成 Prefs stub =====
+# ===== Step 9.1: Prefs stub 兜底 =====
 #
-# termux-x11 的 LorieView / TouchInputHandler 引用 Prefs 类。
-# 上游 Prefs.kt 是 Kotlin 类，依赖 PreferenceDataStore + 大量自定义字段。
-# 我们生成一个最小 stub 提供基本 SharedPreferences 包装。
-#
-# 注意：CmdEntryPoint / MainActivity / LoriePreferences 已在 Step 5 删除，
-# 所以不需要 hidden API stub（IActivityManager 等）。
+# termux-x11 上游应该有 Prefs.kt（Kotlin，继承 PreferenceDataStore）。
+# 如果 sync 时复制成功，跳过 stub 生成。
+# 如果上游改了文件名或位置导致没复制到，生成最小 stub 兜底（功能受限）。
 
-if ! find "$XSERVER_DIR/src/main/java/com/winfex/xserver" -maxdepth 1 -name 'Prefs.*' | grep -q .; then
-    info "未找到 Prefs 类，生成最小 stub"
+if ! find "$XSERVER_DIR/src/main/java/com/winfex/xserver" -name 'Prefs.*' | grep -q .; then
+    warn "未找到 Prefs 类（上游可能改名了），生成最小 stub（功能受限）"
+    warn "  建议手动从 termux-x11 复制 Prefs.kt 过来"
     cat > "$XSERVER_DIR/src/main/java/com/winfex/xserver/Prefs.java" <<'JAVA'
 package com.winfex.xserver;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import androidx.preference.PreferenceDataStore;
 
 /**
- * Stub for termux-x11 Prefs class.
- *
- * 上游 termux-x11 的 Prefs.kt 是 Kotlin 类，继承 PreferenceDataStore，
- * 包含大量自定义字段（touchMode / keys / additionalKeyboardKeySyms 等）。
- *
- * com.winfex 不使用 termux-x11 的 Preference UI（LoriePreferences.java 已删除），
- * 只需要 LorieView / TouchInputHandler 引用 Prefs 时能编译通过。
- *
- * 如果需要完整的 Prefs 功能，请从 termux-x11 上游复制 Prefs.kt 过来并删除此 stub。
+ * Fallback stub for termux-x11 Prefs class.
+ * 上游 Prefs.kt 继承 PreferenceDataStore 并有大量自定义字段，
+ * 此 stub 只提供最基本的 SharedPreferences 包装，部分功能可能不可用。
  */
-public class Prefs {
+public class Prefs extends PreferenceDataStore {
     private static final String PREFS_NAME = "winfex_xserver_prefs";
     private final SharedPreferences sp;
 
@@ -449,22 +464,21 @@ public class Prefs {
 
     public SharedPreferences getSharedPreferences() { return sp; }
 
-    public boolean getBoolean(String key, boolean def) { return sp.getBoolean(key, def); }
-    public void putBoolean(String key, boolean val) { sp.edit().putBoolean(key, val).apply(); }
-
-    public int getInt(String key, int def) { return sp.getInt(key, def); }
-    public void putInt(String key, int val) { sp.edit().putInt(key, val).apply(); }
-
-    public String getString(String key, String def) { return sp.getString(key, def); }
-    public void putString(String key, String val) { sp.edit().putString(key, val).apply(); }
-
-    public float getFloat(String key, float def) { return sp.getFloat(key, def); }
-    public void putFloat(String key, float val) { sp.edit().putFloat(key, val).apply(); }
+    @Override public void putBoolean(String key, boolean val) { sp.edit().putBoolean(key, val).apply(); }
+    @Override public boolean getBoolean(String key, boolean def) { return sp.getBoolean(key, def); }
+    @Override public void putString(String key, String val) { sp.edit().putString(key, val).apply(); }
+    @Override public String getString(String key, String def) { return sp.getString(key, def); }
+    @Override public void putInt(String key, int val) { sp.edit().putInt(key, val).apply(); }
+    @Override public int getInt(String key, int def) { return sp.getInt(key, def); }
+    @Override public void putFloat(String key, float val) { sp.edit().putFloat(key, val).apply(); }
+    @Override public float getFloat(String key, float def) { return sp.getFloat(key, def); }
+    @Override public void putLong(String key, long val) { sp.edit().putLong(key, val).apply(); }
+    @Override public long getLong(String key, long def) { return sp.getLong(key, def); }
 }
 JAVA
-    ok "  生成 Prefs.java stub"
+    ok "  生成 Prefs.java fallback stub"
 else
-    ok "  Prefs 类已存在，跳过 stub 生成"
+    ok "  Prefs 类已从 termux-x11 复制，跳过 stub"
 fi
 
 # ===== Step 10: 尝试下载 MiceWine 的 Wine 兼容 patch =====
