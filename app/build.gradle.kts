@@ -123,7 +123,7 @@ dependencies {
     implementation("com.squareup.moshi:moshi-kotlin:1.15.1")
 
     // Apache Commons Compress — 解压 .rat (tar.xz)
-    implementation("org.apache.commons:commons-compress:1.26.2")
+    implementation("org.apache.commons:commons-compress:1.28.0")
 
     // DocumentFile / SAF
     implementation("androidx.documentfile:documentfile:1.0.1")
