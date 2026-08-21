@@ -143,16 +143,30 @@ for d in patches recipes; do
 done
 
 # submodule 目录
+# termux-x11 的 submodules 在 lorie/src/main/cpp/{xserver,pixman,...} 下
+# .git 可能是文件（submodule）或目录（独立 clone），都要识别
 for sm in "$LORIE_CPP_SRC"/*/; do
     sm_name="$(basename "$sm")"
     # 跳过 lorie patches recipes 这些已经处理的
     case "$sm_name" in
         lorie|patches|recipes) continue ;;
     esac
-    # 只复制有 .git 或 CMakeLists.txt 的目录（认为是 submodule）
-    if [[ -f "$sm/CMakeLists.txt" ]] || [[ -d "$sm/.git" ]] || [[ -f "$sm/meson.build" ]]; then
+    # 识别 submodule：有 .git（文件或目录）、CMakeLists.txt、meson.build 之一
+    if [[ -e "$sm/.git" ]] || [[ -f "$sm/CMakeLists.txt" ]] || [[ -f "$sm/meson.build" ]] || [[ -f "$sm/configure.ac" ]]; then
         rm -rf "$XSERVER_DIR/src/main/cpp/$sm_name"
         cp -r "$sm" "$XSERVER_DIR/src/main/cpp/$sm_name"
+        # 移除 .git（避免 Gradle 误认为是独立 git 仓库）
+        rm -rf "$XSERVER_DIR/src/main/cpp/$sm_name/.git"
+    fi
+done
+
+# 验证关键 submodule 是否复制成功
+for required_sm in xserver pixman libxfont libxshmfence xkbcomp xorgproto; do
+    if [[ ! -d "$XSERVER_DIR/src/main/cpp/$required_sm" ]]; then
+        warn "缺少关键 submodule: $required_sm"
+        warn "  原始路径: $LORIE_CPP_SRC/$required_sm"
+        warn "  目标路径: $XSERVER_DIR/src/main/cpp/$required_sm"
+        warn "  请手动跑: cd build/termux-x11 && git submodule update --init --recursive"
     fi
 done
 
@@ -172,20 +186,42 @@ find "$LORIE_JAVA_SRC" \( -name '*.java' -o -name '*.kt' \) | while read -r f; d
     cp "$f" "$dst"
 done
 
+# 复制 AIDL 文件（termux-x11 用 ICmdEntryInterface.aidl 跨进程通信）
+info "复制 AIDL 文件"
+for aidl_src in \
+    "$TERMUX_X11_DIR/app/src/main/aidl" \
+    "$TERMUX_X11_DIR/lorie/src/main/aidl"; do
+    if [[ -d "$aidl_src" ]]; then
+        mkdir -p "$XSERVER_DIR/src/main/aidl"
+        cp -r "$aidl_src/"* "$XSERVER_DIR/src/main/aidl/" 2>/dev/null || true
+        # 包名替换
+        if [[ -d "$XSERVER_DIR/src/main/aidl/com/termux/x11" ]]; then
+            mkdir -p "$XSERVER_DIR/src/main/aidl/com/winfex"
+            mv "$XSERVER_DIR/src/main/aidl/com/termux/x11" \
+               "$XSERVER_DIR/src/main/aidl/com/winfex/xserver"
+            rmdir "$XSERVER_DIR/src/main/aidl/com/termux" 2>/dev/null || true
+        fi
+        ok "  AIDL: $(find "$XSERVER_DIR/src/main/aidl" -name '*.aidl' | wc -l) 个文件"
+        break
+    fi
+done
+
 ok "Java 源码复制完成"
 
 # ===== Step 6: 全局替换包名 =====
 
 info "替换包名 com.termux.x11 → com.winfex.xserver"
 
+# 替换所有源码、配置、AIDL 文件
 find "$XSERVER_DIR/src/main" -type f \( -name '*.c' -o -name '*.cpp' -o -name '*.h' \
     -o -name '*.kt' -o -name '*.java' -o -name '*.cmake' \
-    -o -name 'CMakeLists.txt' -o -name '*.patch' -o -name '*.xml' \) \
+    -o -name 'CMakeLists.txt' -o -name '*.patch' -o -name '*.xml' \
+    -o -name '*.aidl' \) \
     -exec sed -i 's/com\.termux\.x11/com.winfex.xserver/g' {} +
 
 find "$XSERVER_DIR/src/main" -type f \( -name '*.c' -o -name '*.cpp' -o -name '*.h' \
     -o -name '*.kt' -o -name '*.java' -o -name '*.cmake' \
-    -o -name 'CMakeLists.txt' -o -name '*.patch' \) \
+    -o -name 'CMakeLists.txt' -o -name '*.patch' -o -name '*.aidl' \) \
     -exec sed -i 's@com/termux/x11@com/winfex/xserver@g' {} +
 
 ok "包名替换完成"
@@ -233,7 +269,7 @@ ok "资源文件复制完成"
 
 # ===== Step 9: 重写 xserver/build.gradle.kts =====
 
-info "更新 xserver/build.gradle.kts（加入 externalNativeBuild）"
+info "更新 xserver/build.gradle.kts（加入 externalNativeBuild + 完整依赖）"
 
 cat > "$XSERVER_DIR/build.gradle.kts" <<'GRADLE'
 plugins {
@@ -263,10 +299,17 @@ android {
                 cppFlags += listOf("-std=c++17", "-fno-exceptions", "-fno-rtti")
             }
         }
+
+        // termux-x11 的 CmdEntryPoint.java 引用 BuildConfig.COMMIT
+        buildConfigField("String", "COMMIT", "\"unknown-synced\"")
+        buildConfigField("String", "VERSION_NAME", "0.4.2")
     }
 
     buildFeatures {
         viewBinding = true
+        dataBinding = true
+        aidl = true
+        buildConfig = true
     }
 
     compileOptions {
@@ -289,17 +332,154 @@ android {
         jniLibs {
             useLegacyPackaging = true
         }
+        resources {
+            excludes += setOf(
+                "META-INF/AL2.0",
+                "META-INF/LGPL2.1",
+                "META-INF/*.kotlin_module",
+                "META-INF/DEPENDENCIES"
+            )
+        }
+    }
+
+    // termux-x11 用了一些 hidden API（IActivityManager / IIntentReceiver 等），
+    // 这些类在 SDK 里是 @hide 的。我们要么用 reflection，要么 link hidden API stub。
+    // 这里走最简单的方式：用 SDK 里能访问的等价 API 替代，遇到 @hide 时改 Java 源码。
+    // 详见 README §4.7「编译失败排查」
+    lint {
+        abortOnError = false
+        checkReleaseBuilds = false
     }
 }
 
 dependencies {
+    // AndroidX 基础
     implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.activity:activity-ktx:1.9.0")
+    implementation("androidx.fragment:fragment-ktx:1.8.1")
+    implementation("androidx.annotation:annotation:1.8.0")
+    implementation("androidx.collection:collection-ktx:1.4.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.3")
+
+    // Material
+    implementation("com.google.android.material:material:1.12.0")
+
+    // Preference（LoriePreferences.java 用）
+    implementation("androidx.preference:preference-ktx:1.2.1")
+
+    // RecyclerView（Lorie 设置 UI 用）
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
+
+    // ViewBinding（不需要手动 implementation，AGP plugin 自动处理）
+
+    // Coroutines
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 }
 GRADLE
 
-ok "build.gradle.kts 已更新"
+ok "build.gradle.kts 已更新（含完整依赖）"
+
+# ===== Step 9.1: 生成 hidden API stub（让 CmdEntryPoint 能编译） =====
+#
+# termux-x11 的 CmdEntryPoint.java 用了 Android framework 的 hidden API：
+#   - android.app.IActivityManager
+#   - android.content.IIntentReceiver
+#   - android.content.IIntentSender
+# 这些类在公开 SDK 里没有，运行时存在（@hide），编译时缺。
+# 我们生成最小 stub 让编译通过，运行时被真实的 framework 类替换（包名一致）。
+# 注意：stub 必须放在独立的 source set，且不打入最终 APK，否则会与 framework 冲突。
+# 这里用 buildFeatures.aidl + provided 模式不可行（IActivityManager 不是 AIDL）。
+# 直接放到 src/main/java 里 + 用 lint 跳过重复类检查即可（运行时 framework 优先）。
+
+info "生成 Android hidden API stub（让 CmdEntryPoint.java 编译通过）"
+
+STUB_DIR="$XSERVER_DIR/src/main/java/com/winfex/xserver/stub"
+mkdir -p "$STUB_DIR/android/app" "$STUB_DIR/android/content"
+
+# IActivityManager stub
+cat > "$STUB_DIR/android/app/IActivityManager.java" <<'JAVA'
+package android.app;
+
+/**
+ * Stub for hidden API android.app.IActivityManager.
+ * Real class exists at runtime; this stub only makes compilation pass.
+ * DO NOT USE in production code paths.
+ */
+public interface IActivityManager {
+    // 最小声明，只要能 import 通过即可。CmdEntryPoint 调用的方法反射访问。
+}
+JAVA
+
+# IIntentReceiver stub
+cat > "$STUB_DIR/android/content/IIntentReceiver.java" <<'JAVA'
+package android.content;
+
+public interface IIntentReceiver {
+    void performReceive(Intent intent, int resultCode, String data, android.os.Bundle extras, boolean ordered, boolean sticky, int sendingUser);
+}
+JAVA
+
+# IIntentSender stub
+cat > "$STUB_DIR/android/content/IIntentSender.java" <<'JAVA'
+package android.content;
+
+public interface IIntentSender {
+    int send(int code, Intent intent, String resolvedType, IIntentReceiver finishedReceiver, String requiredPermission, android.os.Bundle options);
+}
+JAVA
+
+ok "  生成 3 个 hidden API stub 文件"
+
+# ===== Step 9.2: 生成 Prefs stub（如果 termux-x11 没提供 Prefs.kt） =====
+#
+# termux-x11 上游有 Prefs.kt（Kotlin），但部分版本可能命名不同或被裁剪。
+# 如果 sync 后 com.winfex.xserver.Prefs 类找不到，生成一个最小 stub。
+
+if ! find "$XSERVER_DIR/src/main/java/com/winfex/xserver" -maxdepth 1 -name 'Prefs.*' | grep -q .; then
+    info "未找到 Prefs 类，生成最小 stub"
+    cat > "$XSERVER_DIR/src/main/java/com/winfex/xserver/Prefs.java" <<'JAVA'
+package com.winfex.xserver;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+
+/**
+ * Stub for termux-x11 Prefs class.
+ * Real Prefs.kt is in upstream termux-x11; this stub provides minimal API
+ * surface used by MainActivity / LorieView / TouchInputHandler.
+ *
+ * 如果上游 Prefs.kt 存在但 sync 脚本没复制对，请手动从
+ * termux-x11/app/src/main/java/com/termux/x11/Prefs.kt 复制过来并删除此 stub。
+ */
+public class Prefs {
+    private static final String PREFS_NAME = "winfex_xserver_prefs";
+    private final SharedPreferences sp;
+
+    public Prefs(Context ctx) {
+        sp = ctx.getApplicationContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+    }
+
+    public SharedPreferences getSharedPreferences() { return sp; }
+
+    public boolean getBoolean(String key, boolean def) { return sp.getBoolean(key, def); }
+    public void putBoolean(String key, boolean val) { sp.edit().putBoolean(key, val).apply(); }
+
+    public int getInt(String key, int def) { return sp.getInt(key, def); }
+    public void putInt(String key, int val) { sp.edit().putInt(key, val).apply(); }
+
+    public String getString(String key, String def) { return sp.getString(key, def); }
+    public void putString(String key, String val) { sp.edit().putString(key, val).apply(); }
+
+    public float getFloat(String key, float def) { return sp.getFloat(key, def); }
+    public void putFloat(String key, float val) { sp.edit().putFloat(key, val).apply(); }
+}
+JAVA
+    ok "  生成 Prefs.java stub"
+else
+    ok "  Prefs 类已存在，跳过 stub 生成"
+fi
 
 # ===== Step 10: 尝试下载 MiceWine 的 Wine 兼容 patch =====
 

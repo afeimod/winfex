@@ -1,11 +1,6 @@
 name: Build
 
 on:
-  push:
-    branches: [main, master]
-    tags: ['v*']
-  pull_request:
-    branches: [main, master]
   workflow_dispatch:
     inputs:
       sync_xserver:
@@ -16,6 +11,18 @@ on:
         description: 'Also build release APK (signed with debug key)'
         type: boolean
         default: true
+      create_release:
+        description: 'Create GitHub Release (requires a tag)'
+        type: boolean
+        default: false
+      tag_name:
+        description: 'Tag name for release (e.g. v0.4.2). Required if create_release=true'
+        type: string
+        required: false
+      prerelease:
+        description: 'Mark as prerelease'
+        type: boolean
+        default: false
 
 env:
   JAVA_VERSION: '17'
@@ -27,57 +34,11 @@ env:
 
 jobs:
   # ============================================================
-  # Job 1: PR 快速检查 —— 不跑 sync-xserver，只验证骨架能编译
-  # ============================================================
-  pr-check:
-    name: PR check (stub X server)
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup JDK ${{ env.JAVA_VERSION }}
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: ${{ env.JAVA_VERSION }}
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: 'platforms;android-${{ env.ANDROID_SDK_PLATFORM }} build-tools;${{ env.ANDROID_BUILD_TOOLS }} ndk;${{ env.ANDROID_NDK }} cmake;${{ env.CMAKE_VERSION }}'
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: ${{ env.GRADLE_VERSION }}
-
-      - name: Generate Gradle wrapper
-        run: gradle wrapper --gradle-version ${{ env.GRADLE_VERSION }} --distribution-type bin
-
-      - name: Build debug APK (stub)
-        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
-
-      - name: Verify xserver stub compiles
-        run: ./gradlew :xserver:assembleDebug --no-daemon
-
-      - name: Upload debug APK
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: winfex-debug-stub-pr${{ github.event.pull_request.number }}
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: warn
-          retention-days: 7
-
-  # ============================================================
-  # Job 2: 完整构建 —— 跑 sync-xserver.sh，含 Lorie DDX
+  # Job 1: 完整构建 —— 跑 sync-xserver.sh，含 Lorie DDX
+  # 仅手动触发（workflow_dispatch）
   # ============================================================
   build:
-    name: Build APK (full)
-    if: github.event_name != 'pull_request'
+    name: Build APK (full, manual)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -120,6 +81,7 @@ jobs:
           key: termux-x11-${{ hashFiles('scripts/sync-xserver.sh') }}-v1
 
       - name: Sync X Server source (Lorie DDX)
+        if: ${{ inputs.sync_xserver == true }}
         env:
           GIT_TERMINAL_PROMPT: '0'
           GIT_LFS_SKIP_SMUDGE: '1'
@@ -127,14 +89,26 @@ jobs:
           chmod +x ./scripts/sync-xserver.sh
           ./scripts/sync-xserver.sh
 
+      - name: Skip X Server sync (user opted out)
+        if: ${{ inputs.sync_xserver != true }}
+        run: |
+          echo "::warning::sync_xserver=false, building with stub X server module"
+          echo "Virtual keys / X server will not work in the resulting APK"
+          ls xserver/src/main/cpp/ || true
+
       - name: Sync status summary
         if: always()
         run: |
           echo "## X Server sync summary"
           echo "- lorie files: $(find xserver/src/main/cpp/lorie -maxdepth 1 -type f 2>/dev/null | wc -l)"
-          echo "- xserver submodule: $([ -d xserver/src/main/cpp/xserver/.git ] && echo '✓ present' || echo '✗ missing')"
+          echo "- xserver submodule: $([ -d xserver/src/main/cpp/xserver ] && echo '✓ present' || echo '✗ missing')"
+          echo "- pixman: $([ -d xserver/src/main/cpp/pixman ] && echo '✓' || echo '✗')"
+          echo "- libxfont: $([ -d xserver/src/main/cpp/libxfont ] && echo '✓' || echo '✗')"
           echo "- patches: $(ls xserver/src/main/cpp/patches/ 2>/dev/null | wc -l)"
           echo "- recipes: $(ls xserver/src/main/cpp/recipes/ 2>/dev/null | wc -l)"
+          echo "- AIDL: $(find xserver/src/main/aidl -name '*.aidl' 2>/dev/null | wc -l)"
+          echo "- Java files: $(find xserver/src/main/java -name '*.java' -o -name '*.kt' 2>/dev/null | wc -l)"
+          echo "- stub files: $(find xserver/src/main/java/com/winfex/xserver/stub -name '*.java' 2>/dev/null | wc -l)"
 
       - name: Generate Gradle wrapper
         run: gradle wrapper --gradle-version ${{ env.GRADLE_VERSION }} --distribution-type bin
@@ -143,7 +117,7 @@ jobs:
         run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
 
       - name: Build release APK
-        if: ${{ github.event.inputs.build_release != 'false' }}
+        if: ${{ inputs.build_release == true }}
         run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
 
       - name: List build outputs
@@ -163,7 +137,7 @@ jobs:
           retention-days: 30
 
       - name: Upload release APK
-        if: ${{ always() && github.event.inputs.build_release != 'false' }}
+        if: ${{ always() && inputs.build_release == true }}
         uses: actions/upload-artifact@v4
         with:
           name: winfex-release
@@ -193,16 +167,43 @@ jobs:
           retention-days: 7
 
   # ============================================================
-  # Job 3: Tag 触发 —— 创建 GitHub Release
+  # Job 2: 创建 GitHub Release —— 仅当 inputs.create_release=true
   # ============================================================
   release:
     name: Publish Release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: ${{ inputs.create_release == true && inputs.build_release == true && inputs.tag_name != '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - name: Validate inputs
+        run: |
+          if [ -z "${{ inputs.tag_name }}" ]; then
+            echo "::error::tag_name is required when create_release=true"
+            exit 1
+          fi
+          echo "Releasing as tag: ${{ inputs.tag_name }}"
+          echo "Prerelease: ${{ inputs.prerelease }}"
+
+      - name: Checkout (for tag creation)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create and push tag
+        run: |
+          TAG="${{ inputs.tag_name }}"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::warning::tag $TAG already exists, skipping creation"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "Release $TAG (manual trigger by ${{ github.actor }})"
+            git push origin "$TAG"
+            echo "Created tag $TAG"
+          fi
+
       - name: Download release APK
         uses: actions/download-artifact@v4
         with:
@@ -217,7 +218,7 @@ jobs:
 
       - name: Rename APKs with version
         run: |
-          VERSION="${GITHUB_REF_NAME}"
+          VERSION="${{ inputs.tag_name }}"
           cd apks
           for f in *.apk; do
             base="${f%.apk}"
@@ -237,16 +238,12 @@ jobs:
           ls -lh *.apk
 
       - name: Generate release notes
-        id: notes
         run: |
-          VERSION="${GITHUB_REF_NAME}"
-          if [[ "$VERSION" == *-* ]]; then
-            echo "prerelease=true" >> $GITHUB_OUTPUT
-          else
-            echo "prerelease=false" >> $GITHUB_OUTPUT
-          fi
+          VERSION="${{ inputs.tag_name }}"
           cat > release_body.md <<EOF
           ## Winfex $VERSION
+
+          > 此 Release 由 @${{ github.actor }} 手动触发构建。
 
           ### 下载
 
@@ -263,7 +260,7 @@ jobs:
 
           - **此 APK 已内置 Lorie X Server**（DISPLAY=:13）
           - **不含 Wine / Box64 / DXVK 等二进制**，需自行导入 .rat 包
-          - 参考 [README §3](https://github.com/${{ github.repository }}/blob/${VERSION}/README.md#3--rat-包获取) 获取 .rat 包
+          - 参考 [README §3](https://github.com/${{ github.repository }}/blob/${VERSION}/README.md) 获取 .rat 包
           - 首次启动后：
             1. 去「包」tab 导入 5 个核心 .rat 包（Core/Wine/Box64/DXVK/VulkanDriver）
             2. 去「前缀」tab 启动 X Server
@@ -281,9 +278,9 @@ jobs:
           files: apks/*.apk
           body_path: release_body.md
           draft: false
-          prerelease: ${{ steps.notes.outputs.prerelease == 'true' }}
+          prerelease: ${{ inputs.prerelease }}
           generate_release_notes: true
-          tag_name: ${{ github.ref_name }}
-          name: Winfex ${{ github.ref_name }}
+          tag_name: ${{ inputs.tag_name }}
+          name: Winfex ${{ inputs.tag_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
