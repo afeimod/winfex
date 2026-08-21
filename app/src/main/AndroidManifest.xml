@@ -21,11 +21,10 @@
 
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.hardware.vulkan.level" android:required="true" />
-    <uses-feature android:name="android.hardware.vulkan.version" android:version="1.1.0" android:required="true" />
+    <uses-feature android:name="android.hardware.vulkan.version" android:version="0x00401000" android:required="true" />
 
     <application
         android:name=".WinfexApp"
-        android:allowNativeLibraryPointerSizeChecks="false"
         android:extractNativeLibs="true"
         android:hardwareAccelerated="true"
         android:icon="@mipmap/ic_launcher"

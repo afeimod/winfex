@@ -173,20 +173,49 @@ done
 ok "cpp 源码复制完成"
 
 # ===== Step 5: 复制 Java 源码 =====
+#
+# termux-x11 的 Java 层包含：
+#   - LorieView.java           ← 必需，SurfaceView 渲染 X server 画面 + JNI 桥
+#   - TouchInputHandler.java   ← 必需，触摸→鼠标/键盘手势
+#   - input/*.java             ← 必需，输入事件分发
+#   - MainActivity.java        ← ❌ 删除，引用大量 hidden API + Prefs.kt
+#   - CmdEntryPoint.java       ← ❌ 删除，引用 hidden API (IActivityManager 等)
+#   - LoriePreferences.java    ← ❌ 删除，引用 PreferenceDataStore + Prefs.kt
+#   - Prefs.kt                 ← ❌ 删除（如果有），用我们的 stub 代替
+#
+# com.winfex 不需要 termux-x11 的 Activity/Preferences/CmdEntry，
+# 因为我们有自己的 XServerManager + WineRunnerService + XServerActivity(stub)。
+# 只需要 LorieView + 输入处理 + native 代码。
 
 info "复制 Lorie Java 源码到 xserver/src/main/java/com/winfex/xserver/"
 mkdir -p "$XSERVER_DIR/src/main/java/com/winfex/xserver"
 rm -f "$XSERVER_DIR/src/main/java/com/winfex/xserver/"*.kt
 rm -f "$XSERVER_DIR/src/main/java/com/winfex/xserver/"*.java
 
+# 不复制的文件列表（会导致编译失败的 termux-x11 专属代码）
+SKIP_FILES="MainActivity.java CmdEntryPoint.java LoriePreferences.java Prefs.java Prefs.kt"
+
 find "$LORIE_JAVA_SRC" \( -name '*.java' -o -name '*.kt' \) | while read -r f; do
     rel="${f#$LORIE_JAVA_SRC/}"
+    # 跳过不需要的文件
+    skip=false
+    for skip_file in $SKIP_FILES; do
+        if [[ "$(basename "$f")" == "$skip_file" ]]; then
+            skip=true
+            break
+        fi
+    done
+    if $skip; then
+        info "  跳过: $rel (依赖 hidden API / Prefs.kt)"
+        continue
+    fi
     dst="$XSERVER_DIR/src/main/java/com/winfex/xserver/$rel"
     mkdir -p "$(dirname "$dst")"
     cp "$f" "$dst"
 done
 
 # 复制 AIDL 文件（termux-x11 用 ICmdEntryInterface.aidl 跨进程通信）
+# 即使删了 CmdEntryPoint.java，AIDL 也可以保留（不影响编译，将来可能用到）
 info "复制 AIDL 文件"
 for aidl_src in \
     "$TERMUX_X11_DIR/app/src/main/aidl" \
@@ -206,7 +235,7 @@ for aidl_src in \
     fi
 done
 
-ok "Java 源码复制完成"
+ok "Java 源码复制完成（已跳过 $(echo $SKIP_FILES | wc -w) 个有问题的文件）"
 
 # ===== Step 6: 全局替换包名 =====
 
@@ -382,61 +411,14 @@ GRADLE
 
 ok "build.gradle.kts 已更新（含完整依赖）"
 
-# ===== Step 9.1: 生成 hidden API stub（让 CmdEntryPoint 能编译） =====
+# ===== Step 9.1: 生成 Prefs stub =====
 #
-# termux-x11 的 CmdEntryPoint.java 用了 Android framework 的 hidden API：
-#   - android.app.IActivityManager
-#   - android.content.IIntentReceiver
-#   - android.content.IIntentSender
-# 这些类在公开 SDK 里没有，运行时存在（@hide），编译时缺。
-# 我们生成最小 stub 让编译通过，运行时被真实的 framework 类替换（包名一致）。
-# 注意：stub 必须放在独立的 source set，且不打入最终 APK，否则会与 framework 冲突。
-# 这里用 buildFeatures.aidl + provided 模式不可行（IActivityManager 不是 AIDL）。
-# 直接放到 src/main/java 里 + 用 lint 跳过重复类检查即可（运行时 framework 优先）。
-
-info "生成 Android hidden API stub（让 CmdEntryPoint.java 编译通过）"
-
-STUB_DIR="$XSERVER_DIR/src/main/java/com/winfex/xserver/stub"
-mkdir -p "$STUB_DIR/android/app" "$STUB_DIR/android/content"
-
-# IActivityManager stub
-cat > "$STUB_DIR/android/app/IActivityManager.java" <<'JAVA'
-package android.app;
-
-/**
- * Stub for hidden API android.app.IActivityManager.
- * Real class exists at runtime; this stub only makes compilation pass.
- * DO NOT USE in production code paths.
- */
-public interface IActivityManager {
-    // 最小声明，只要能 import 通过即可。CmdEntryPoint 调用的方法反射访问。
-}
-JAVA
-
-# IIntentReceiver stub
-cat > "$STUB_DIR/android/content/IIntentReceiver.java" <<'JAVA'
-package android.content;
-
-public interface IIntentReceiver {
-    void performReceive(Intent intent, int resultCode, String data, android.os.Bundle extras, boolean ordered, boolean sticky, int sendingUser);
-}
-JAVA
-
-# IIntentSender stub
-cat > "$STUB_DIR/android/content/IIntentSender.java" <<'JAVA'
-package android.content;
-
-public interface IIntentSender {
-    int send(int code, Intent intent, String resolvedType, IIntentReceiver finishedReceiver, String requiredPermission, android.os.Bundle options);
-}
-JAVA
-
-ok "  生成 3 个 hidden API stub 文件"
-
-# ===== Step 9.2: 生成 Prefs stub（如果 termux-x11 没提供 Prefs.kt） =====
+# termux-x11 的 LorieView / TouchInputHandler 引用 Prefs 类。
+# 上游 Prefs.kt 是 Kotlin 类，依赖 PreferenceDataStore + 大量自定义字段。
+# 我们生成一个最小 stub 提供基本 SharedPreferences 包装。
 #
-# termux-x11 上游有 Prefs.kt（Kotlin），但部分版本可能命名不同或被裁剪。
-# 如果 sync 后 com.winfex.xserver.Prefs 类找不到，生成一个最小 stub。
+# 注意：CmdEntryPoint / MainActivity / LoriePreferences 已在 Step 5 删除，
+# 所以不需要 hidden API stub（IActivityManager 等）。
 
 if ! find "$XSERVER_DIR/src/main/java/com/winfex/xserver" -maxdepth 1 -name 'Prefs.*' | grep -q .; then
     info "未找到 Prefs 类，生成最小 stub"
@@ -448,11 +430,14 @@ import android.content.SharedPreferences;
 
 /**
  * Stub for termux-x11 Prefs class.
- * Real Prefs.kt is in upstream termux-x11; this stub provides minimal API
- * surface used by MainActivity / LorieView / TouchInputHandler.
  *
- * 如果上游 Prefs.kt 存在但 sync 脚本没复制对，请手动从
- * termux-x11/app/src/main/java/com/termux/x11/Prefs.kt 复制过来并删除此 stub。
+ * 上游 termux-x11 的 Prefs.kt 是 Kotlin 类，继承 PreferenceDataStore，
+ * 包含大量自定义字段（touchMode / keys / additionalKeyboardKeySyms 等）。
+ *
+ * com.winfex 不使用 termux-x11 的 Preference UI（LoriePreferences.java 已删除），
+ * 只需要 LorieView / TouchInputHandler 引用 Prefs 时能编译通过。
+ *
+ * 如果需要完整的 Prefs 功能，请从 termux-x11 上游复制 Prefs.kt 过来并删除此 stub。
  */
 public class Prefs {
     private static final String PREFS_NAME = "winfex_xserver_prefs";
