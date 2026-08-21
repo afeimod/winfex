@@ -54,7 +54,7 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           packages: 'platforms;android-${{ env.ANDROID_SDK_PLATFORM }} build-tools;${{ env.ANDROID_BUILD_TOOLS }} ndk;${{ env.ANDROID_NDK }} cmake;${{ env.CMAKE_VERSION }}'
 
