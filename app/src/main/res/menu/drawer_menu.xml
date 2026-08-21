@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <group android:checkableBehavior="single">
+        <item
+            android:id="@+id/drawer_settings"
+            android:icon="@drawable/ic_settings"
+            android:title="@string/drawer_settings" />
+        <item
+            android:id="@+id/drawer_logs"
+            android:icon="@drawable/ic_library"
+            android:title="@string/drawer_logs" />
+        <item
+            android:id="@+id/drawer_about"
+            android:icon="@drawable/ic_wine"
+            android:title="@string/drawer_about" />
+    </group>
+</menu>

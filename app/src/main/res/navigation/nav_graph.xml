@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/libraryFragment">
+
+    <fragment
+        android:id="@+id/libraryFragment"
+        android:name="com.winfex.ui.library.LibraryFragment"
+        android:label="@string/tab_library" />
+    <fragment
+        android:id="@+id/prefixesFragment"
+        android:name="com.winfex.ui.prefixes.PrefixesFragment"
+        android:label="@string/tab_prefixes" />
+    <fragment
+        android:id="@+id/packagesFragment"
+        android:name="com.winfex.ui.packages.PackagesFragment"
+        android:label="@string/tab_packages" />
+    <fragment
+        android:id="@+id/inputFragment"
+        android:name="com.winfex.ui.input.InputFragment"
+        android:label="@string/tab_input" />
+    <fragment
+        android:id="@+id/shortcutsFragment"
+        android:name="com.winfex.ui.shortcuts.ShortcutsFragment"
+        android:label="@string/tab_shortcuts" />
+</navigation>

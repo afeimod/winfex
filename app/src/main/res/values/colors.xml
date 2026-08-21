@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Winlator 风格主色调：深色背景 + 紫蓝强调 -->
+    <color name="bg_primary">#0E1014</color>
+    <color name="bg_surface">#151821</color>
+    <color name="bg_surface_2">#1C2030</color>
+    <color name="bg_elevated">#222637</color>
+
+    <color name="text_primary">#E8EAF0</color>
+    <color name="text_secondary">#A2A8B5</color>
+    <color name="text_disabled">#5B6171</color>
+
+    <color name="accent">#7C5CFF</color>
+    <color name="accent_dim">#5A46C7</color>
+    <color name="accent_secondary">#00D4FF</color>
+    <color name="accent_gradient_start">#7C5CFF</color>
+    <color name="accent_gradient_end">#00D4FF</color>
+
+    <color name="divider">#2A2F40</color>
+    <color name="ripple">#33FFFFFF</color>
+
+    <color name="status_ok">#3DDC84</color>
+    <color name="status_warn">#FFB74D</color>
+    <color name="status_err">#FF5252</color>
+
+    <color name="ic_launcher_bg">#0E1014</color>
+</resources>

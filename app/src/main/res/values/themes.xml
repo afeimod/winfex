@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Base theme -->
+    <style name="Theme.Winfex" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorPrimaryVariant">@color/accent_dim</item>
+        <item name="colorOnPrimary">@color/text_primary</item>
+        <item name="colorSecondary">@color/accent_secondary</item>
+        <item name="colorOnSecondary">@color/bg_primary</item>
+
+        <item name="android:colorBackground">@color/bg_primary</item>
+        <item name="colorSurface">@color/bg_surface</item>
+        <item name="colorOnSurface">@color/text_primary</item>
+        <item name="colorSurfaceVariant">@color/bg_surface_2</item>
+        <item name="colorOnSurfaceVariant">@color/text_secondary</item>
+
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar" tools:targetApi="m">false</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.Winfex.Dialog</item>
+        <item name="bottomNavigationStyle">@style/Widget.Winfex.BottomNavigationView</item>
+    </style>
+
+    <style name="ThemeOverlay.Winfex.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorSurface">@color/bg_surface_2</item>
+        <item name="colorOnSurface">@color/text_primary</item>
+    </style>
+
+    <style name="Widget.Winfex.BottomNavigationView" parent="Widget.Material3.BottomNavigationView">
+        <item name="itemTextColor">@color/bottom_nav_color</item>
+        <item name="itemIconTint">@color/bottom_nav_color</item>
+        <item name="backgroundTint">@color/bg_surface</item>
+        <item name="itemActiveIndicatorStyle">@style/Widget.Winfex.BottomNavigationView.ActiveIndicator</item>
+    </style>
+
+    <style name="Widget.Winfex.BottomNavigationView.ActiveIndicator"
+           parent="Widget.Material3.BottomNavigationView.ActiveIndicator">
+        <item name="android:color">@color/bg_elevated</item>
+    </style>
+
+    <!-- 标题文字样式 -->
+    <style name="TextAppearance.Winfex.TitleLarge" parent="TextAppearance.Material3.TitleLarge">
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="TextAppearance.Winfex.TitleMedium" parent="TextAppearance.Material3.TitleMedium">
+        <item name="android:textColor">@color/text_primary</item>
+    </style>
+
+    <style name="TextAppearance.Winfex.BodyMedium" parent="TextAppearance.Material3.BodyMedium">
+        <item name="android:textColor">@color/text_secondary</item>
+    </style>
+
+    <style name="Widget.Winfex.Card" parent="Widget.Material3.CardView.Filled">
+        <item name="cardBackgroundColor">@color/bg_surface_2</item>
+        <item name="cardCornerRadius">12dp</item>
+        <item name="cardElevation">0dp</item>
+        <item name="contentPadding">16dp</item>
+    </style>
+
+    <style name="Widget.Winfex.Button.Primary" parent="Widget.Material3.Button">
+        <item name="backgroundTint">@color/accent</item>
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="cornerRadius">8dp</item>
+    </style>
+
+    <style name="Widget.Winfex.Button.Outlined" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="strokeColor">@color/accent</item>
+        <item name="android:textColor">@color/accent</item>
+        <item name="cornerRadius">8dp</item>
+    </style>
+
+</resources>

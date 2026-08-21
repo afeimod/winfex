@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/nav_library"
+        android:icon="@drawable/ic_library"
+        android:title="@string/tab_library" />
+    <item
+        android:id="@+id/nav_prefixes"
+        android:icon="@drawable/ic_container"
+        android:title="@string/tab_prefixes" />
+    <item
+        android:id="@+id/nav_packages"
+        android:icon="@drawable/ic_packages"
+        android:title="@string/tab_packages" />
+    <item
+        android:id="@+id/nav_input"
+        android:icon="@drawable/ic_input"
+        android:title="@string/tab_input" />
+    <item
+        android:id="@+id/nav_shortcuts"
+        android:icon="@drawable/ic_shortcut"
+        android:title="@string/tab_shortcuts" />
+</menu>

@@ -1,0 +1,144 @@
+package com.winfex.core
+
+import android.util.Log
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import com.winfex.model.WinePrefix
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.util.UUID
+
+/**
+ * Wine 前缀管理器。
+ *
+ * 创建 prefix 时的完整流程（对齐 MiceWine WinePrefixManagerFragment.createWinePrefix）：
+ *   1. 创建目录结构 drive_c/windows/{system32,syswow64,Fonts}, dosdevices, users
+ *   2. 运行 wineboot --init
+ *   3. 复制 CoreFonts 到 drive_c/windows/Fonts
+ *   4. 安装 DirectX DLL（d3dcompiler_*.dll, d3dx*.dll）到 system32 + syswow64
+ *   5. 安装 OpenAL DLL
+ *   6. 导入注册表（DefaultDLLsOverrides.reg）
+ *   7. 配置 Windows 版本（win10/win7/winxp）
+ */
+object WinePrefixManager {
+
+    private const val TAG = "WinePrefixManager"
+    private const val CFG_FILE = "winfex.cfg"
+
+    private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
+    private val adapter = moshi.adapter(WinePrefix::class.java)
+
+    private val _prefixes = MutableStateFlow<List<WinePrefix>>(emptyList())
+    val prefixes: StateFlow<List<WinePrefix>> = _prefixes.asStateFlow()
+
+    suspend fun loadAll() = withContext(Dispatchers.IO) {
+        val dir = WinfexPaths.prefixesDir
+        if (!dir.exists()) return@withContext
+        val list = dir.listFiles { f -> f.isDirectory }?.mapNotNull { sub ->
+            val cfg = File(sub, CFG_FILE)
+            if (!cfg.exists()) return@mapNotNull null
+            try { adapter.fromJson(cfg.readText())?.copy(id = sub.name) }
+            catch (e: Exception) { Log.e(TAG, "load ${sub.name} failed", e); null }
+        } ?: emptyList()
+        _prefixes.value = list.sortedByDescending { it.updatedAt }
+    }
+
+    /**
+     * 创建一个新 prefix（仅初始化目录结构 + 默认配置，不调 wineboot）。
+     * 用户首次启动游戏时由 WineWrapper.initPrefix 触发真正的 wineboot。
+     */
+    suspend fun create(name: String, template: WinePrefix? = null): WinePrefix =
+        withContext(Dispatchers.IO) {
+            val id = UUID.randomUUID().toString().take(8)
+            val dir = WinfexPaths.prefixDir(id).apply { mkdirs() }
+            val now = System.currentTimeMillis()
+            val cfg = (template?.copy(id = id, name = name, createdAt = now, updatedAt = now)
+                ?: WinePrefix(
+                    id = id, name = name, createdAt = now, updatedAt = now
+                ))
+
+            initDirectoryLayout(dir)
+            save(cfg)
+            _prefixes.value = _prefixes.value + cfg
+            Log.i(TAG, "created prefix $id name=$name")
+            cfg
+        }
+
+    suspend fun clone(srcId: String, newName: String): WinePrefix = withContext(Dispatchers.IO) {
+        val src = WinfexPaths.prefixDir(srcId)
+        if (!src.exists()) throw java.io.IOException("source prefix $srcId not found")
+        val newId = UUID.randomUUID().toString().take(8)
+        val dst = WinfexPaths.prefixDir(newId).apply { mkdirs() }
+        src.copyRecursively(dst, overwrite = true)
+        val now = System.currentTimeMillis()
+        val cfg = loadConfig(srcId)!!.copy(id = newId, name = newName, createdAt = now, updatedAt = now)
+        save(cfg)
+        _prefixes.value = _prefixes.value + cfg
+        cfg
+    }
+
+    suspend fun delete(id: String) = withContext(Dispatchers.IO) {
+        val dir = WinfexPaths.prefixDir(id)
+        if (dir.exists()) dir.deleteRecursively()
+        _prefixes.value = _prefixes.value.filterNot { it.id == id }
+    }
+
+    suspend fun update(cfg: WinePrefix) = withContext(Dispatchers.IO) {
+        val updated = cfg.copy(updatedAt = System.currentTimeMillis())
+        save(updated)
+        _prefixes.value = _prefixes.value.map { if (it.id == updated.id) updated else it }
+    }
+
+    fun get(id: String): WinePrefix? = _prefixes.value.firstOrNull { it.id == id }
+
+    fun loadConfig(id: String): WinePrefix? {
+        val f = File(WinfexPaths.prefixDir(id), CFG_FILE)
+        if (!f.exists()) return null
+        return try { adapter.fromJson(f.readText()) }
+        catch (e: Exception) { Log.e(TAG, "loadConfig $id failed", e); null }
+    }
+
+    /**
+     * 创建 prefix 的目录骨架。
+     */
+    private fun initDirectoryLayout(dir: File) {
+        // drive_c/windows/{system32,syswow64,Fonts}
+        File(dir, "drive_c/windows/system32").mkdirs()
+        File(dir, "drive_c/windows/syswow64").mkdirs()
+        File(dir, "drive_c/windows/Fonts").mkdirs()
+        File(dir, "drive_c/windows/inf").mkdirs()
+        File(dir, "drive_c/windows/twain_32").mkdirs()
+        // users
+        File(dir, "drive_c/users/winfex").mkdirs()
+        File(dir, "drive_c/users/winfex/Desktop").mkdirs()
+        File(dir, "drive_c/users/winfex/Documents").mkdirs()
+        File(dir, "drive_c/users/winfex/AppData/Local").mkdirs()
+        // ProgramData
+        File(dir, "drive_c/ProgramData/Microsoft/Windows/Start Menu/Programs").mkdirs()
+        File(dir, "drive_c/Program Files").mkdirs()
+        File(dir, "drive_c/Program Files (x86)").mkdirs()
+        // dosdevices
+        File(dir, "dosdevices").mkdirs()
+        // c: → drive_c
+        try {
+            val c = File(dir, "dosdevices/c:")
+            if (!c.exists()) android.system.Os.symlink("../drive_c", c.absolutePath)
+        } catch (_: Exception) {}
+        // z: → /sdcard
+        try {
+            val z = File(dir, "dosdevices/z:")
+            if (!z.exists()) android.system.Os.symlink("/sdcard", z.absolutePath)
+        } catch (_: Exception) {}
+        // dxvk cache
+        File(dir, "dxvk-cache").mkdirs()
+    }
+
+    private fun save(cfg: WinePrefix) {
+        val f = File(WinfexPaths.prefixDir(cfg.id), CFG_FILE)
+        f.writeText(adapter.toJson(cfg))
+    }
+}

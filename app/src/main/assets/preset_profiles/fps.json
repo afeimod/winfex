@@ -1,0 +1,50 @@
+{
+  "id": "preset_fps",
+  "name": "FPS 布局（CS / Half-Life 风格）",
+  "createdAt": 1700000000000,
+  "updatedAt": 1700000000000,
+  "cursorSpeed": 1.5,
+  "overlayOpacity": 0.5,
+  "disableTouchpadOnButtons": true,
+  "elements": [
+    {"id":"look","type":"TRACKPAD","shape":"CIRCLE","x":0.50,"y":0.45,"scale":2.5,"toggleSwitch":false,"text":"","bindings":[
+      {"tag":"MOVE","value":0,"comment":""},
+      {"tag":"MOVE","value":1,"comment":""},
+      {"tag":"MOVE","value":2,"comment":""},
+      {"tag":"MOVE","value":3,"comment":""}
+    ],"deadZone":0.08},
+    {"id":"move_stick","type":"STICK","shape":"CIRCLE","x":0.18,"y":0.78,"scale":1.2,"toggleSwitch":false,"text":"","bindings":[
+      {"tag":"KEY","value":25,"comment":"W"},
+      {"tag":"KEY","value":40,"comment":"D"},
+      {"tag":"KEY","value":39,"comment":"S"},
+      {"tag":"KEY","value":24,"comment":"A"}
+    ],"deadZone":0.20},
+    {"id":"fire","type":"BUTTON","shape":"CIRCLE","x":0.85,"y":0.78,"scale":1.4,"toggleSwitch":false,"text":"射","bindings":[
+      {"tag":"MOUSE","value":1,"comment":""}
+    ]},
+    {"id":"aim","type":"BUTTON","shape":"CIRCLE","x":0.78,"y":0.65,"scale":1.0,"toggleSwitch":false,"text":"瞄","bindings":[
+      {"tag":"MOUSE","value":3,"comment":""}
+    ]},
+    {"id":"reload","type":"BUTTON","shape":"ROUND_RECT","x":0.92,"y":0.65,"scale":0.8,"toggleSwitch":false,"text":"R","bindings":[
+      {"tag":"KEY","value":27,"comment":"R"}
+    ]},
+    {"id":"jump","type":"BUTTON","shape":"ROUND_RECT","x":0.85,"y":0.92,"scale":0.9,"toggleSwitch":false,"text":"跳","bindings":[
+      {"tag":"KEY","value":65,"comment":"Space"}
+    ]},
+    {"id":"crouch","type":"BUTTON","shape":"ROUND_RECT","x":0.72,"y":0.92,"scale":0.8,"toggleSwitch":false,"text":"蹲","bindings":[
+      {"tag":"KEY","value":50,"comment":"Shift"}
+    ]},
+    {"id":"weapon1","type":"BUTTON","shape":"ROUND_RECT","x":0.05,"y":0.25,"scale":0.6,"toggleSwitch":false,"text":"1","bindings":[
+      {"tag":"KEY","value":10,"comment":"1"}
+    ]},
+    {"id":"weapon2","type":"BUTTON","shape":"ROUND_RECT","x":0.05,"y":0.32,"scale":0.6,"toggleSwitch":false,"text":"2","bindings":[
+      {"tag":"KEY","value":11,"comment":"2"}
+    ]},
+    {"id":"weapon3","type":"BUTTON","shape":"ROUND_RECT","x":0.05,"y":0.39,"scale":0.6,"toggleSwitch":false,"text":"3","bindings":[
+      {"tag":"KEY","value":12,"comment":"3"}
+    ]},
+    {"id":"esc","type":"BUTTON","shape":"ROUND_RECT","x":0.05,"y":0.08,"scale":0.7,"toggleSwitch":false,"text":"ESC","bindings":[
+      {"tag":"KEY","value":9,"comment":"ESC"}
+    ]}
+  ]
+}

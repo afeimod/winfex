@@ -1,0 +1,289 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      sync_xserver:
+        description: 'Run sync-xserver.sh to fetch Lorie DDX source'
+        type: boolean
+        default: true
+      build_release:
+        description: 'Also build release APK (signed with debug key)'
+        type: boolean
+        default: true
+
+env:
+  JAVA_VERSION: '17'
+  GRADLE_VERSION: '8.7'
+  ANDROID_SDK_PLATFORM: '34'
+  ANDROID_BUILD_TOOLS: '34.0.0'
+  ANDROID_NDK: '26.1.10909125'   # r26b
+  CMAKE_VERSION: '3.22.1'
+
+jobs:
+  # ============================================================
+  # Job 1: PR 快速检查 —— 不跑 sync-xserver，只验证骨架能编译
+  # ============================================================
+  pr-check:
+    name: PR check (stub X server)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-${{ env.ANDROID_SDK_PLATFORM }} build-tools;${{ env.ANDROID_BUILD_TOOLS }} ndk;${{ env.ANDROID_NDK }} cmake;${{ env.CMAKE_VERSION }}'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: Generate Gradle wrapper
+        run: gradle wrapper --gradle-version ${{ env.GRADLE_VERSION }} --distribution-type bin
+
+      - name: Build debug APK (stub)
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Verify xserver stub compiles
+        run: ./gradlew :xserver:assembleDebug --no-daemon
+
+      - name: Upload debug APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: winfex-debug-stub-pr${{ github.event.pull_request.number }}
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ============================================================
+  # Job 2: 完整构建 —— 跑 sync-xserver.sh，含 Lorie DDX
+  # ============================================================
+  build:
+    name: Build APK (full)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-${{ env.ANDROID_SDK_PLATFORM }} build-tools;${{ env.ANDROID_BUILD_TOOLS }} ndk;${{ env.ANDROID_NDK }} cmake;${{ env.CMAKE_VERSION }}'
+
+      - name: Install Linux build deps (for Lorie submodules)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            python3 python3-pip meson ninja-build \
+            xutils-dev libxcb1-dev libx11-dev \
+            bison flex
+          pip3 install --user meson mako jinja2 pyyaml
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: Cache termux-x11 source
+        id: cache-x11
+        uses: actions/cache@v4
+        with:
+          path: build/termux-x11
+          key: termux-x11-${{ hashFiles('scripts/sync-xserver.sh') }}-v1
+
+      - name: Sync X Server source (Lorie DDX)
+        env:
+          GIT_TERMINAL_PROMPT: '0'
+          GIT_LFS_SKIP_SMUDGE: '1'
+        run: |
+          chmod +x ./scripts/sync-xserver.sh
+          ./scripts/sync-xserver.sh
+
+      - name: Sync status summary
+        if: always()
+        run: |
+          echo "## X Server sync summary"
+          echo "- lorie files: $(find xserver/src/main/cpp/lorie -maxdepth 1 -type f 2>/dev/null | wc -l)"
+          echo "- xserver submodule: $([ -d xserver/src/main/cpp/xserver/.git ] && echo '✓ present' || echo '✗ missing')"
+          echo "- patches: $(ls xserver/src/main/cpp/patches/ 2>/dev/null | wc -l)"
+          echo "- recipes: $(ls xserver/src/main/cpp/recipes/ 2>/dev/null | wc -l)"
+
+      - name: Generate Gradle wrapper
+        run: gradle wrapper --gradle-version ${{ env.GRADLE_VERSION }} --distribution-type bin
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Build release APK
+        if: ${{ github.event.inputs.build_release != 'false' }}
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: List build outputs
+        if: always()
+        run: |
+          echo "## Build outputs"
+          find app/build/outputs -type f -name '*.apk' -exec ls -lh {} \; || true
+          find xserver/build/outputs -type f \( -name '*.aar' -o -name '*.so' \) -exec ls -lh {} \; || true
+
+      - name: Upload debug APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: winfex-debug
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload release APK
+        if: ${{ always() && github.event.inputs.build_release != 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: winfex-release
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload xserver AAR
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xserver-aar
+          path: xserver/build/outputs/aar/*.aar
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload build reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-reports
+          path: |
+            app/build/reports/
+            xserver/build/reports/
+            **/build/reports/
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ============================================================
+  # Job 3: Tag 触发 —— 创建 GitHub Release
+  # ============================================================
+  release:
+    name: Publish Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release APK
+        uses: actions/download-artifact@v4
+        with:
+          name: winfex-release
+          path: apks/
+
+      - name: Download debug APK (附加)
+        uses: actions/download-artifact@v4
+        with:
+          name: winfex-debug
+          path: apks/debug/
+
+      - name: Rename APKs with version
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          cd apks
+          for f in *.apk; do
+            base="${f%.apk}"
+            mv "$f" "winfex-${VERSION}-${base}.apk"
+          done
+          # debug 子目录
+          if [ -d debug ]; then
+            cd debug
+            for f in *.apk; do
+              base="${f%.apk}"
+              mv "$f" "../winfex-${VERSION}-${base}.apk"
+            done
+            cd ..
+            rmdir debug || true
+          fi
+          echo "## Final APK list"
+          ls -lh *.apk
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          if [[ "$VERSION" == *-* ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          fi
+          cat > release_body.md <<EOF
+          ## Winfex $VERSION
+
+          ### 下载
+
+          - \`winfex-${VERSION}-app-debug.apk\` — Debug 版（带 logcat 输出）
+          - \`winfex-${VERSION}-app-release-unsigned.apk\` — Release 版（需自行签名）
+
+          ### 安装
+
+          \`\`\`bash
+          adb install -r winfex-${VERSION}-app-debug.apk
+          \`\`\`
+
+          ### 注意事项
+
+          - **此 APK 已内置 Lorie X Server**（DISPLAY=:13）
+          - **不含 Wine / Box64 / DXVK 等二进制**，需自行导入 .rat 包
+          - 参考 [README §3](https://github.com/${{ github.repository }}/blob/${VERSION}/README.md#3--rat-包获取) 获取 .rat 包
+          - 首次启动后：
+            1. 去「包」tab 导入 5 个核心 .rat 包（Core/Wine/Box64/DXVK/VulkanDriver）
+            2. 去「前缀」tab 启动 X Server
+            3. 去「输入」tab 授权悬浮窗权限并激活虚拟按键
+          - 蓝牙手柄暂未支持（v0.5 计划）
+
+          ### 完整变更日志
+
+          见 [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${VERSION}/CHANGELOG.md) 或对比 commit 历史。
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: apks/*.apk
+          body_path: release_body.md
+          draft: false
+          prerelease: ${{ steps.notes.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          tag_name: ${{ github.ref_name }}
+          name: Winfex ${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

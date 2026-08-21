@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- EGL + GLES2 用于 Lorie 渲染 -->
+    <uses-feature android:glEsVersion="0x00020000" android:required="true" />
+
+    <application>
+        <!-- XServerActivity：Lorie 的入口 Activity，由 sync-xserver.sh 注入实际代码 -->
+        <activity
+            android:name=".XServerActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.Winfex" />
+    </application>
+</manifest>

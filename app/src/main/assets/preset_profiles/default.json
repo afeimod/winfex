@@ -1,0 +1,47 @@
+{
+  "id": "preset_default",
+  "name": "默认布局",
+  "createdAt": 1700000000000,
+  "updatedAt": 1700000000000,
+  "cursorSpeed": 1.0,
+  "overlayOpacity": 0.6,
+  "disableTouchpadOnButtons": true,
+  "elements": [
+    {"id":"dpad1","type":"DPAD","shape":"CIRCLE","x":0.15,"y":0.72,"scale":1.0,"toggleSwitch":false,"text":"","bindings":[
+      {"tag":"KEY","value":25,"comment":"W"},
+      {"tag":"KEY","value":40,"comment":"D"},
+      {"tag":"KEY","value":39,"comment":"S"},
+      {"tag":"KEY","value":24,"comment":"A"}
+    ],"deadZone":0.15},
+    {"id":"btn_a","type":"BUTTON","shape":"CIRCLE","x":0.85,"y":0.72,"scale":1.0,"toggleSwitch":false,"text":"A","bindings":[
+      {"tag":"KEY","value":65,"comment":"Space"}
+    ]},
+    {"id":"btn_b","type":"BUTTON","shape":"CIRCLE","x":0.92,"y":0.62,"scale":1.0,"toggleSwitch":false,"text":"B","bindings":[
+      {"tag":"KEY","value":41,"comment":"F"}
+    ]},
+    {"id":"btn_x","type":"BUTTON","shape":"CIRCLE","x":0.78,"y":0.62,"scale":1.0,"toggleSwitch":false,"text":"X","bindings":[
+      {"tag":"KEY","value":27,"comment":"R"}
+    ]},
+    {"id":"btn_y","type":"BUTTON","shape":"CIRCLE","x":0.85,"y":0.52,"scale":1.0,"toggleSwitch":false,"text":"Y","bindings":[
+      {"tag":"KEY","value":26,"comment":"E"}
+    ]},
+    {"id":"btn_mouse_l","type":"BUTTON","shape":"ROUND_RECT","x":0.65,"y":0.92,"scale":0.8,"toggleSwitch":false,"text":"LMB","bindings":[
+      {"tag":"MOUSE","value":1,"comment":""}
+    ]},
+    {"id":"btn_mouse_r","type":"BUTTON","shape":"ROUND_RECT","x":0.78,"y":0.92,"scale":0.8,"toggleSwitch":false,"text":"RMB","bindings":[
+      {"tag":"MOUSE","value":3,"comment":""}
+    ]},
+    {"id":"trackpad1","type":"TRACKPAD","shape":"CIRCLE","x":0.50,"y":0.92,"scale":0.7,"toggleSwitch":false,"text":"","bindings":[
+      {"tag":"MOVE","value":0,"comment":"UP"},
+      {"tag":"MOVE","value":1,"comment":"RIGHT"},
+      {"tag":"MOVE","value":2,"comment":"DOWN"},
+      {"tag":"MOVE","value":3,"comment":"LEFT"}
+    ],"deadZone":0.15},
+    {"id":"btn_esc","type":"BUTTON","shape":"ROUND_RECT","x":0.05,"y":0.08,"scale":0.7,"toggleSwitch":false,"text":"ESC","bindings":[
+      {"tag":"KEY","value":9,"comment":"ESC"}
+    ]},
+    {"id":"btn_enter","type":"BUTTON","shape":"ROUND_RECT","x":0.12,"y":0.08,"scale":0.7,"toggleSwitch":false,"text":"↵","bindings":[
+      {"tag":"KEY","value":36,"comment":"Enter"}
+    ]}
+  ]
+}

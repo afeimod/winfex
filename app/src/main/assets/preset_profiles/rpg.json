@@ -1,0 +1,53 @@
+{
+  "id": "preset_rpg",
+  "name": "RPG 布局（Skyrim / 巫师 风格）",
+  "createdAt": 1700000000000,
+  "updatedAt": 1700000000000,
+  "cursorSpeed": 1.2,
+  "overlayOpacity": 0.65,
+  "disableTouchpadOnButtons": true,
+  "elements": [
+    {"id":"move","type":"STICK","shape":"CIRCLE","x":0.15,"y":0.75,"scale":1.3,"toggleSwitch":false,"text":"","bindings":[
+      {"tag":"KEY","value":25,"comment":"W"},
+      {"tag":"KEY","value":40,"comment":"D"},
+      {"tag":"KEY","value":39,"comment":"S"},
+      {"tag":"KEY","value":24,"comment":"A"}
+    ],"deadZone":0.18},
+    {"id":"camera","type":"TRACKPAD","shape":"CIRCLE","x":0.85,"y":0.45,"scale":1.5,"toggleSwitch":false,"text":"","bindings":[
+      {"tag":"MOVE","value":0,"comment":""},
+      {"tag":"MOVE","value":1,"comment":""},
+      {"tag":"MOVE","value":2,"comment":""},
+      {"tag":"MOVE","value":3,"comment":""}
+    ],"deadZone":0.10},
+    {"id":"action","type":"BUTTON","shape":"CIRCLE","x":0.85,"y":0.78,"scale":1.2,"toggleSwitch":false,"text":"E","bindings":[
+      {"tag":"KEY","value":26,"comment":"E"}
+    ]},
+    {"id":"attack","type":"BUTTON","shape":"CIRCLE","x":0.92,"y":0.68,"scale":1.0,"toggleSwitch":false,"text":"LMB","bindings":[
+      {"tag":"MOUSE","value":1,"comment":""}
+    ]},
+    {"id":"block","type":"BUTTON","shape":"CIRCLE","x":0.78,"y":0.68,"scale":1.0,"toggleSwitch":false,"text":"RMB","bindings":[
+      {"tag":"MOUSE","value":3,"comment":""}
+    ]},
+    {"id":"jump","type":"BUTTON","shape":"ROUND_RECT","x":0.85,"y":0.92,"scale":0.9,"toggleSwitch":false,"text":"Space","bindings":[
+      {"tag":"KEY","value":65,"comment":"Space"}
+    ]},
+    {"id":"sprint","type":"BUTTON","shape":"ROUND_RECT","x":0.72,"y":0.92,"scale":0.8,"toggleSwitch":true,"text":"Shift","bindings":[
+      {"tag":"KEY","value":50,"comment":"Shift"}
+    ]},
+    {"id":"map","type":"BUTTON","shape":"ROUND_RECT","x":0.05,"y":0.08,"scale":0.7,"toggleSwitch":false,"text":"Tab","bindings":[
+      {"tag":"KEY","value":23,"comment":"Tab"}
+    ]},
+    {"id":"menu","type":"BUTTON","shape":"ROUND_RECT","x":0.12,"y":0.08,"scale":0.7,"toggleSwitch":false,"text":"ESC","bindings":[
+      {"tag":"KEY","value":9,"comment":"ESC"}
+    ]},
+    {"id":"q","type":"BUTTON","shape":"ROUND_RECT","x":0.05,"y":0.25,"scale":0.7,"toggleSwitch":false,"text":"Q","bindings":[
+      {"tag":"KEY","value":24,"comment":"Q"}
+    ]},
+    {"id":"f","type":"BUTTON","shape":"ROUND_RECT","x":0.05,"y":0.32,"scale":0.7,"toggleSwitch":false,"text":"F","bindings":[
+      {"tag":"KEY","value":41,"comment":"F"}
+    ]},
+    {"id":"r","type":"BUTTON","shape":"ROUND_RECT","x":0.05,"y":0.39,"scale":0.7,"toggleSwitch":false,"text":"R","bindings":[
+      {"tag":"KEY","value":27,"comment":"R"}
+    ]}
+  ]
+}

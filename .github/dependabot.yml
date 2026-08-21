@@ -1,0 +1,29 @@
+version: 2
+updates:
+  # Gradle 依赖
+  - package-ecosystem: "gradle"
+    directory: "/app"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "kotlin"
+    commit-message:
+      prefix: "deps"
+    reviewers:
+      - "winfex/maintainers"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "ci"
