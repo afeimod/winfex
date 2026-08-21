@@ -301,8 +301,9 @@ android {
         }
 
         // termux-x11 的 CmdEntryPoint.java 引用 BuildConfig.COMMIT
+        // 注意：buildConfigField 对 String 类型，值必须含双引号（AGP 不会自动加）
         buildConfigField("String", "COMMIT", "\"unknown-synced\"")
-        buildConfigField("String", "VERSION_NAME", "0.4.2")
+        buildConfigField("String", "VERSION_NAME", "\"0.4.2\"")
     }
 
     buildFeatures {
