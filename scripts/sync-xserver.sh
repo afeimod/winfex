@@ -345,17 +345,47 @@ done
 [[ $DISPLAY_REPLACED -eq 0 ]] && warn "未找到 DISPLAY 默认值字符串，可能 termux-x11 改了代码结构"
 
 # ===== Step 8: 复制资源文件 =====
+#
+# termux-x11 的资源在 app/src/main/res/ 或 lorie/src/main/res/ 下。
+# 复制所有 res 子目录（drawable / layout / values / anim / xml / menu / mipmap / color 等）。
+# 不能只复制部分子目录，否则 R.anim.* / R.xml.* / R.id.* 会找不到。
 
-info "复制资源文件"
+info "复制资源文件（所有 res 子目录）"
 
-for d in drawable layout values; do
-    src_dir="$TERMUX_X11_DIR/app/src/main/res/$d"
-    [[ -d "$src_dir" ]] || continue
-    mkdir -p "$XSERVER_DIR/src/main/res/$d"
-    cp -rn "$src_dir/"* "$XSERVER_DIR/src/main/res/$d/" 2>/dev/null || true
+# 探测 res 源目录
+RES_SRC=""
+for candidate in \
+    "$TERMUX_X11_DIR/app/src/main/res" \
+    "$TERMUX_X11_DIR/lorie/src/main/res"; do
+    if [[ -d "$candidate" ]] && [[ -d "$candidate/values" ]]; then
+        RES_SRC="$candidate"
+        break
+    fi
 done
 
-ok "资源文件复制完成"
+if [[ -z "$RES_SRC" ]]; then
+    warn "未找到 termux-x11 的 res 目录，跳过资源复制"
+    warn "  后续 R.* 引用会编译失败"
+else
+    ok "  res 源目录: $RES_SRC"
+    # 复制所有子目录
+    for d in "$RES_SRC"/*/; do
+        [[ -d "$d" ]] || continue
+        d_name=$(basename "$d")
+        mkdir -p "$XSERVER_DIR/src/main/res/$d_name"
+        cp -rn "$d"* "$XSERVER_DIR/src/main/res/$d_name/" 2>/dev/null || true
+    done
+
+    # 统计复制的资源
+    res_count=$(find "$XSERVER_DIR/src/main/res" -type f | wc -l)
+    ok "  复制了 $res_count 个资源文件"
+    info "  res 子目录:"
+    for d in "$XSERVER_DIR/src/main/res"/*/; do
+        [[ -d "$d" ]] || continue
+        cnt=$(find "$d" -type f | wc -l)
+        echo "    $(basename "$d"): $cnt 个文件"
+    done
+fi
 
 # ===== Step 9: 重写 xserver/build.gradle.kts =====
 
@@ -480,26 +510,119 @@ ok "build.gradle.kts 已更新（含完整依赖）"
 # 如果上游改了文件名或位置导致没复制到，生成最小 stub 兜底（功能受限）。
 
 if ! find "$XSERVER_DIR/src/main/java/com/winfex/xserver" -name 'Prefs.*' | grep -q .; then
-    warn "未找到 Prefs 类（上游可能改名了），生成最小 stub（功能受限）"
-    warn "  建议手动从 termux-x11 复制 Prefs.kt 过来"
+    warn "未找到 Prefs 类（上游可能改名了），生成完整 stub"
+    warn "  包含 LoriePreferences / TouchInputHandler 引用的所有字段"
     cat > "$XSERVER_DIR/src/main/java/com/winfex/xserver/Prefs.java" <<'JAVA'
 package com.winfex.xserver;
 
 import android.content.Context;
 import android.content.SharedPreferences;
 import androidx.preference.PreferenceDataStore;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Fallback stub for termux-x11 Prefs class.
- * 上游 Prefs.kt 继承 PreferenceDataStore 并有大量自定义字段，
- * 此 stub 只提供最基本的 SharedPreferences 包装，部分功能可能不可用。
+ *
+ * 上游 Prefs.kt 继承 PreferenceDataStore 并有大量 Preference<T> 字段。
+ * 此 stub 提供所有被 LoriePreferences / TouchInputHandler / MainActivity 引用的字段，
+ * 用简单的 Preference<T> 包装 SharedPreferences 实现。
+ *
+ * 每个字段都是 public Preference<T>，.get() 返回值，.set() 设置值。
+ * 字段在构造函数里初始化（因为依赖 sp，sp 在构造函数里才创建）。
  */
 public class Prefs extends PreferenceDataStore {
     private static final String PREFS_NAME = "winfex_xserver_prefs";
+    public final Context ctx;
     private final SharedPreferences sp;
+    public final Map<String, Preference<?>> keys = new HashMap<>();
+
+    // Preference 字段（在构造函数里初始化）
+    public final Preference<Integer> touchMode;
+    public final Preference<Integer> displayResolutionMode;
+    public final Preference<Boolean> fullscreen;
+    public final Preference<Boolean> PIP;
+    public final Preference<Boolean> hideCutout;
+    public final Preference<Boolean> additionalKbdVisible;
+    public final Preference<Boolean> dexMetaKeyCapture;
+    public final Preference<Integer> ekbarPosition;
+    public final Preference<Boolean> enableAccessibilityServiceAutomatically;
+    public final Preference<String> extra_keys_config;
+    public final Preference<Boolean> filterOutWinkey;
+    public final Preference<Boolean> recheckStoringSecondaryDisplayPreferences;
+    public final Preference<Integer> screenIdleTimeout;
+    public final Preference<Boolean> showMouseHelper;
+    public final Preference<Boolean> showStylusClickOverride;
+    public final Preference<Boolean> useTermuxEKBarBehaviour;
+
+    // Preference 包装类
+    public static class Preference<T> {
+        private final SharedPreferences sp;
+        private final String key;
+        private final T def;
+        private final Class<T> type;
+
+        public Preference(SharedPreferences sp, String key, T def, Class<T> type) {
+            this.sp = sp; this.key = key; this.def = def; this.type = type;
+        }
+        @SuppressWarnings("unchecked")
+        public T get() {
+            if (type == Boolean.class) return (T) Boolean.valueOf(sp.getBoolean(key, (Boolean) def));
+            if (type == Integer.class) return (T) Integer.valueOf(sp.getInt(key, (Integer) def));
+            if (type == Float.class) return (T) Float.valueOf(sp.getFloat(key, (Float) def));
+            if (type == Long.class) return (T) Long.valueOf(sp.getLong(key, (Long) def));
+            return (T) sp.getString(key, def == null ? null : def.toString());
+        }
+        public void set(T v) {
+            SharedPreferences.Editor e = sp.edit();
+            if (type == Boolean.class) e.putBoolean(key, (Boolean) v);
+            else if (type == Integer.class) e.putInt(key, (Integer) v);
+            else if (type == Float.class) e.putFloat(key, (Float) v);
+            else if (type == Long.class) e.putLong(key, (Long) v);
+            else e.putString(key, v == null ? null : v.toString());
+            e.apply();
+        }
+    }
 
     public Prefs(Context ctx) {
-        sp = ctx.getApplicationContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        this.ctx = ctx.getApplicationContext();
+        this.sp = this.ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+
+        // 初始化所有 Preference 字段
+        touchMode = new Preference<>(sp, "touchMode", 1, Integer.class);
+        displayResolutionMode = new Preference<>(sp, "displayResolutionMode", 0, Integer.class);
+        fullscreen = new Preference<>(sp, "fullscreen", false, Boolean.class);
+        PIP = new Preference<>(sp, "PIP", false, Boolean.class);
+        hideCutout = new Preference<>(sp, "hideCutout", false, Boolean.class);
+        additionalKbdVisible = new Preference<>(sp, "additionalKbdVisible", false, Boolean.class);
+        dexMetaKeyCapture = new Preference<>(sp, "dexMetaKeyCapture", false, Boolean.class);
+        ekbarPosition = new Preference<>(sp, "ekbarPosition", 0, Integer.class);
+        enableAccessibilityServiceAutomatically = new Preference<>(sp, "enableAccessibilityServiceAutomatically", false, Boolean.class);
+        extra_keys_config = new Preference<>(sp, "extra_keys_config", "", String.class);
+        filterOutWinkey = new Preference<>(sp, "filterOutWinkey", false, Boolean.class);
+        recheckStoringSecondaryDisplayPreferences = new Preference<>(sp, "recheckStoringSecondaryDisplayPreferences", false, Boolean.class);
+        screenIdleTimeout = new Preference<>(sp, "screenIdleTimeout", 0, Integer.class);
+        showMouseHelper = new Preference<>(sp, "showMouseHelper", false, Boolean.class);
+        showStylusClickOverride = new Preference<>(sp, "showStylusClickOverride", false, Boolean.class);
+        useTermuxEKBarBehaviour = new Preference<>(sp, "useTermuxEKBarBehaviour", false, Boolean.class);
+
+        // 注册到 keys map
+        keys.put("touchMode", touchMode);
+        keys.put("displayResolutionMode", displayResolutionMode);
+        keys.put("fullscreen", fullscreen);
+        keys.put("PIP", PIP);
+        keys.put("hideCutout", hideCutout);
+        keys.put("additionalKbdVisible", additionalKbdVisible);
+        keys.put("dexMetaKeyCapture", dexMetaKeyCapture);
+        keys.put("ekbarPosition", ekbarPosition);
+        keys.put("enableAccessibilityServiceAutomatically", enableAccessibilityServiceAutomatically);
+        keys.put("extra_keys_config", extra_keys_config);
+        keys.put("filterOutWinkey", filterOutWinkey);
+        keys.put("recheckStoringSecondaryDisplayPreferences", recheckStoringSecondaryDisplayPreferences);
+        keys.put("screenIdleTimeout", screenIdleTimeout);
+        keys.put("showMouseHelper", showMouseHelper);
+        keys.put("showStylusClickOverride", showStylusClickOverride);
+        keys.put("useTermuxEKBarBehaviour", useTermuxEKBarBehaviour);
     }
 
     public SharedPreferences getSharedPreferences() { return sp; }
@@ -516,7 +639,7 @@ public class Prefs extends PreferenceDataStore {
     @Override public long getLong(String key, long def) { return sp.getLong(key, def); }
 }
 JAVA
-    ok "  生成 Prefs.java fallback stub"
+    ok "  生成 Prefs.java fallback stub（含 16 个 Preference 字段）"
 else
     ok "  Prefs 类已从 termux-x11 复制，跳过 stub"
 fi
