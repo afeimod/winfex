@@ -521,7 +521,7 @@ ok "build.gradle.kts 已更新（含完整依赖）"
 
 if ! find "$XSERVER_DIR/src/main/java/com/winfex/xserver" -name 'Prefs.*' | grep -q .; then
     warn "未找到 Prefs 类（上游可能改名了），生成完整 stub"
-    warn "  包含 LoriePreferences / TouchInputHandler 引用的所有字段"
+    warn "  包含 LoriePreferences / TouchInputHandler / MainActivity 引用的所有字段和方法"
     cat > "$XSERVER_DIR/src/main/java/com/winfex/xserver/Prefs.java" <<'JAVA'
 package com.winfex.xserver;
 
@@ -535,11 +535,12 @@ import java.util.Map;
  * Fallback stub for termux-x11 Prefs class.
  *
  * 上游 Prefs.kt 继承 PreferenceDataStore 并有大量 Preference<T> 字段。
- * 此 stub 提供所有被 LoriePreferences / TouchInputHandler / MainActivity 引用的字段，
- * 用简单的 Preference<T> 包装 SharedPreferences 实现。
+ * 此 stub 提供所有被 LoriePreferences / TouchInputHandler / MainActivity 引用的字段。
  *
- * 每个字段都是 public Preference<T>，.get() 返回值，.set() 设置值。
- * 字段在构造函数里初始化（因为依赖 sp，sp 在构造函数里才创建）。
+ * 注意：
+ *   - touchMode / displayResolutionMode 在上游是 Preference<String>（存 "1"/"2"/"exact" 等）
+ *   - Preference 有 get() / put(T) / set(T) / asList() 方法
+ *   - keys 是 Map<String, Preference<?>>，asList() 返回 ListPreference 数据
  */
 public class Prefs extends PreferenceDataStore {
     private static final String PREFS_NAME = "winfex_xserver_prefs";
@@ -548,22 +549,49 @@ public class Prefs extends PreferenceDataStore {
     public final Map<String, Preference<?>> keys = new HashMap<>();
 
     // Preference 字段（在构造函数里初始化）
-    public final Preference<Integer> touchMode;
-    public final Preference<Integer> displayResolutionMode;
+    public final Preference<String> touchMode;
+    public final Preference<String> displayResolutionMode;
+    public final Preference<String> displayResolutionExact;
+    public final Preference<String> displayResolutionCustom;
+    public final Preference<Boolean> displayStretch;
+    public final Preference<Boolean> adjustResolution;
+    public final Preference<Integer> displayScale;
     public final Preference<Boolean> fullscreen;
     public final Preference<Boolean> PIP;
     public final Preference<Boolean> hideCutout;
     public final Preference<Boolean> additionalKbdVisible;
+    public final Preference<Boolean> showAdditionalKbd;
+    public final Preference<Boolean> showIMEWhileExternalConnected;
     public final Preference<Boolean> dexMetaKeyCapture;
     public final Preference<Integer> ekbarPosition;
+    public final Preference<Boolean> ekbarPositionIgnoreOrientation;
     public final Preference<Boolean> enableAccessibilityServiceAutomatically;
     public final Preference<String> extra_keys_config;
     public final Preference<Boolean> filterOutWinkey;
-    public final Preference<Boolean> recheckStoringSecondaryDisplayPreferences;
     public final Preference<Integer> screenIdleTimeout;
     public final Preference<Boolean> showMouseHelper;
     public final Preference<Boolean> showStylusClickOverride;
     public final Preference<Boolean> useTermuxEKBarBehaviour;
+    public final Preference<Boolean> tapToMove;
+    public final Preference<Boolean> preferScancodes;
+    public final Preference<Boolean> pointerCapture;
+    public final Preference<Boolean> adjustHeightForEK;
+    public final Preference<Integer> opacityEKBar;
+    public final Preference<String> forceOrientation;
+    public final Preference<Boolean> pauseKeyInterceptingWithEsc;
+    public final Preference<Boolean> scaleTouchpad;
+    public final Preference<Boolean> Reseed;
+
+    // ListPreference 数据（asList 返回）
+    public static class ListData {
+        public final CharSequence[] entries;
+        public final CharSequence[] entryValues;
+        public ListData(CharSequence[] entries, CharSequence[] entryValues) {
+            this.entries = entries; this.entryValues = entryValues;
+        }
+        public CharSequence[] getEntries() { return entries; }
+        public CharSequence[] getValues() { return entryValues; }
+    }
 
     // Preference 包装类
     public static class Preference<T> {
@@ -571,6 +599,7 @@ public class Prefs extends PreferenceDataStore {
         private final String key;
         private final T def;
         private final Class<T> type;
+        private ListData listData;
 
         public Preference(SharedPreferences sp, String key, T def, Class<T> type) {
             this.sp = sp; this.key = key; this.def = def; this.type = type;
@@ -583,6 +612,7 @@ public class Prefs extends PreferenceDataStore {
             if (type == Long.class) return (T) Long.valueOf(sp.getLong(key, (Long) def));
             return (T) sp.getString(key, def == null ? null : def.toString());
         }
+        public void put(T v) { set(v); }
         public void set(T v) {
             SharedPreferences.Editor e = sp.edit();
             if (type == Boolean.class) e.putBoolean(key, (Boolean) v);
@@ -592,6 +622,13 @@ public class Prefs extends PreferenceDataStore {
             else e.putString(key, v == null ? null : v.toString());
             e.apply();
         }
+        public Preference<T> withList(CharSequence[] entries, CharSequence[] values) {
+            this.listData = new ListData(entries, values);
+            return this;
+        }
+        public ListData asList() {
+            return listData != null ? listData : new ListData(new CharSequence[0], new CharSequence[0]);
+        }
     }
 
     public Prefs(Context ctx) {
@@ -599,41 +636,81 @@ public class Prefs extends PreferenceDataStore {
         this.sp = this.ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
 
         // 初始化所有 Preference 字段
-        touchMode = new Preference<>(sp, "touchMode", 1, Integer.class);
-        displayResolutionMode = new Preference<>(sp, "displayResolutionMode", 0, Integer.class);
+        touchMode = new Preference<>(sp, "touchMode", "1", String.class);
+        displayResolutionMode = new Preference<>(sp, "displayResolutionMode", "exact", String.class);
+        displayResolutionExact = new Preference<>(sp, "displayResolutionExact", "", String.class);
+        displayResolutionCustom = new Preference<>(sp, "displayResolutionCustom", "", String.class);
+        displayStretch = new Preference<>(sp, "displayStretch", false, Boolean.class);
+        adjustResolution = new Preference<>(sp, "adjustResolution", false, Boolean.class);
+        displayScale = new Preference<>(sp, "displayScale", 100, Integer.class);
         fullscreen = new Preference<>(sp, "fullscreen", false, Boolean.class);
         PIP = new Preference<>(sp, "PIP", false, Boolean.class);
         hideCutout = new Preference<>(sp, "hideCutout", false, Boolean.class);
         additionalKbdVisible = new Preference<>(sp, "additionalKbdVisible", false, Boolean.class);
+        showAdditionalKbd = new Preference<>(sp, "showAdditionalKbd", false, Boolean.class);
+        showIMEWhileExternalConnected = new Preference<>(sp, "showIMEWhileExternalConnected", false, Boolean.class);
         dexMetaKeyCapture = new Preference<>(sp, "dexMetaKeyCapture", false, Boolean.class);
         ekbarPosition = new Preference<>(sp, "ekbarPosition", 0, Integer.class);
+        ekbarPositionIgnoreOrientation = new Preference<>(sp, "ekbarPositionIgnoreOrientation", false, Boolean.class);
         enableAccessibilityServiceAutomatically = new Preference<>(sp, "enableAccessibilityServiceAutomatically", false, Boolean.class);
         extra_keys_config = new Preference<>(sp, "extra_keys_config", "", String.class);
         filterOutWinkey = new Preference<>(sp, "filterOutWinkey", false, Boolean.class);
-        recheckStoringSecondaryDisplayPreferences = new Preference<>(sp, "recheckStoringSecondaryDisplayPreferences", false, Boolean.class);
         screenIdleTimeout = new Preference<>(sp, "screenIdleTimeout", 0, Integer.class);
         showMouseHelper = new Preference<>(sp, "showMouseHelper", false, Boolean.class);
         showStylusClickOverride = new Preference<>(sp, "showStylusClickOverride", false, Boolean.class);
         useTermuxEKBarBehaviour = new Preference<>(sp, "useTermuxEKBarBehaviour", false, Boolean.class);
+        tapToMove = new Preference<>(sp, "tapToMove", false, Boolean.class);
+        preferScancodes = new Preference<>(sp, "preferScancodes", false, Boolean.class);
+        pointerCapture = new Preference<>(sp, "pointerCapture", false, Boolean.class);
+        adjustHeightForEK = new Preference<>(sp, "adjustHeightForEK", false, Boolean.class);
+        opacityEKBar = new Preference<>(sp, "opacityEKBar", 100, Integer.class);
+        forceOrientation = new Preference<>(sp, "forceOrientation", "default", String.class);
+        pauseKeyInterceptingWithEsc = new Preference<>(sp, "pauseKeyInterceptingWithEsc", false, Boolean.class);
+        scaleTouchpad = new Preference<>(sp, "scaleTouchpad", false, Boolean.class);
+        Reseed = new Preference<>(sp, "Reseed", false, Boolean.class);
 
         // 注册到 keys map
         keys.put("touchMode", touchMode);
         keys.put("displayResolutionMode", displayResolutionMode);
+        keys.put("displayResolutionExact", displayResolutionExact);
+        keys.put("displayResolutionCustom", displayResolutionCustom);
+        keys.put("displayStretch", displayStretch);
+        keys.put("adjustResolution", adjustResolution);
+        keys.put("displayScale", displayScale);
         keys.put("fullscreen", fullscreen);
         keys.put("PIP", PIP);
         keys.put("hideCutout", hideCutout);
         keys.put("additionalKbdVisible", additionalKbdVisible);
+        keys.put("showAdditionalKbd", showAdditionalKbd);
+        keys.put("showIMEWhileExternalConnected", showIMEWhileExternalConnected);
         keys.put("dexMetaKeyCapture", dexMetaKeyCapture);
         keys.put("ekbarPosition", ekbarPosition);
+        keys.put("ekbarPositionIgnoreOrientation", ekbarPositionIgnoreOrientation);
         keys.put("enableAccessibilityServiceAutomatically", enableAccessibilityServiceAutomatically);
         keys.put("extra_keys_config", extra_keys_config);
         keys.put("filterOutWinkey", filterOutWinkey);
-        keys.put("recheckStoringSecondaryDisplayPreferences", recheckStoringSecondaryDisplayPreferences);
         keys.put("screenIdleTimeout", screenIdleTimeout);
         keys.put("showMouseHelper", showMouseHelper);
         keys.put("showStylusClickOverride", showStylusClickOverride);
         keys.put("useTermuxEKBarBehaviour", useTermuxEKBarBehaviour);
+        keys.put("tapToMove", tapToMove);
+        keys.put("preferScancodes", preferScancodes);
+        keys.put("pointerCapture", pointerCapture);
+        keys.put("adjustHeightForEK", adjustHeightForEK);
+        keys.put("opacityEKBar", opacityEKBar);
+        keys.put("forceOrientation", forceOrientation);
+        keys.put("pauseKeyInterceptingWithEsc", pauseKeyInterceptingWithEsc);
+        keys.put("scaleTouchpad", scaleTouchpad);
+        keys.put("Reseed", Reseed);
     }
+
+    // MainActivity 调用的方法
+    public void recheckStoringSecondaryDisplayPreferences() {
+        // no-op stub
+    }
+
+    // LoriePreferences 调用：p.get() 返回 SharedPreferences
+    public SharedPreferences get() { return sp; }
 
     public SharedPreferences getSharedPreferences() { return sp; }
 
@@ -649,9 +726,123 @@ public class Prefs extends PreferenceDataStore {
     @Override public long getLong(String key, long def) { return sp.getLong(key, def); }
 }
 JAVA
-    ok "  生成 Prefs.java fallback stub（含 16 个 Preference 字段）"
+    ok "  生成 Prefs.java fallback stub（含 32 个 Preference 字段 + recheckStoringSecondaryDisplayPreferences 方法）"
 else
     ok "  Prefs 类已从 termux-x11 复制，跳过 stub"
+fi
+
+# ===== Step 9.2: 补缺失的 R.string 资源 =====
+#
+# termux-x11 的 LoriePreferences.java 引用了大量 R.string.lorie_pref_*，
+# 这些 string 应该在 res/values/strings.xml 里。如果 sync 没复制全或上游改名了，
+# 生成一个 fallback strings.xml 补上缺失的条目。
+# 用 <resources> 合并机制：放在 winfex_strings.xml 里，不覆盖原 strings.xml。
+
+info "检查并补全缺失的 R.string 资源"
+FALLBACK_STRINGS="$XSERVER_DIR/src/main/res/values/winfex_fallback_strings.xml"
+mkdir -p "$(dirname "$FALLBACK_STRINGS")"
+cat > "$FALLBACK_STRINGS" <<'XML'
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Fallback strings for termux-x11 LoriePreferences / MainActivity -->
+    <!-- 这些 string 如果在 termux-x11 strings.xml 里已存在，AGP 会自动合并去重 -->
+    <string name="lorie_app_name">Winfex X Server</string>
+    <string name="lorie_notification_content_text">Winfex X Server is running</string>
+
+    <string name="lorie_pref_summary_requiresExactOrCustom">Requires exact or custom resolution</string>
+    <string name="lorie_pref_summary_requiresIntercepting">Requires intercepting</string>
+    <string name="lorie_pref_summary_requiresTrackpadAndNative">Requires trackpad and native</string>
+    <string name="lorie_pref_summary_screenIdleTimeoutConflict">Conflicts with screen idle timeout</string>
+    <string name="lorie_pref_screenIdleTimeoutSystem">Use system screen idle timeout</string>
+
+    <string name="extra_keys_config_desc">Extra keys configuration</string>
+
+    <!-- 其他常用 string，防止后续编译失败 -->
+    <string name="lorie_pref_touchpad_mode">Touchpad mode</string>
+    <string name="lorie_pref_fullscreen">Fullscreen</string>
+    <string name="lorie_pref_pip">Picture-in-picture</string>
+    <string name="lorie_pref_hide_cutout">Hide display cutout</string>
+    <string name="lorie_pref_additional_kbd_visible">Additional keyboard visible</string>
+    <string name="lorie_pref_show_additional_kbd">Show additional keyboard</string>
+    <string name="lorie_pref_show_ime_while_external_connected">Show IME while external keyboard connected</string>
+    <string name="lorie_pref_dex_meta_key_capture">Capture meta keys (DeX)</string>
+    <string name="lorie_pref_ekbar_position">Extra keys bar position</string>
+    <string name="lorie_pref_ekbar_position_ignore_orientation">Ignore orientation for EK bar</string>
+    <string name="lorie_pref_enable_accessibility_service_automatically">Enable accessibility service automatically</string>
+    <string name="lorie_pref_filter_out_winkey">Filter out Win key</string>
+    <string name="lorie_pref_screen_idle_timeout">Screen idle timeout</string>
+    <string name="lorie_pref_show_mouse_helper">Show mouse helper</string>
+    <string name="lorie_pref_show_stylus_click_override">Stylus click override</string>
+    <string name="lorie_pref_use_termux_ekbar_behaviour">Use Termux EK bar behaviour</string>
+    <string name="lorie_pref_tap_to_move">Tap to move</string>
+    <string name="lorie_pref_prefer_scancodes">Prefer scancodes</string>
+    <string name="lorie_pref_pointer_capture">Pointer capture</string>
+    <string name="lorie_pref_adjust_height_for_ek">Adjust height for extra keys</string>
+    <string name="lorie_pref_opacity_ekbar">Extra keys bar opacity</string>
+    <string name="lorie_pref_force_orientation">Force orientation</string>
+    <string name="lorie_pref_pause_key_intercepting_with_esc">Pause key intercepting with ESC</string>
+    <string name="lorie_pref_scale_touchpad">Scale touchpad</string>
+    <string name="lorie_pref_display_stretch">Display stretch</string>
+    <string name="lorie_pref_adjust_resolution">Adjust resolution</string>
+    <string name="lorie_pref_display_scale">Display scale</string>
+    <string name="lorie_pref_display_resolution_mode">Display resolution mode</string>
+    <string name="lorie_pref_display_resolution_exact">Display resolution (exact)</string>
+    <string name="lorie_pref_display_resolution_custom">Display resolution (custom)</string>
+    <string name="lorie_pref_reseed">Reseed</string>
+</resources>
+XML
+ok "  生成 winfex_fallback_strings.xml（含 35+ 个 fallback string）"
+
+# ===== Step 9.3: 处理 PrefsProto 类型兼容性 =====
+#
+# termux-x11 的 LoriePreferences.java 内部定义了 PrefsProto 接口，
+# PrefsProto.Preference 是 LoriePreferences 自己的 Preference 基类。
+# termux-x11 的 Prefs.kt 里 Preference 继承 PrefsProto.Preference。
+#
+# 我们的 Prefs stub 用的是 Prefs.Preference，需要让它继承 LoriePreferences.PrefsProto.Preference。
+# 但 PrefsProto 在 LoriePreferences 内部，需要先检查它定义了哪些 abstract 方法。
+
+LORIE_PREFS="$XSERVER_DIR/src/main/java/com/winfex/xserver/LoriePreferences.java"
+if [[ -f "$LORIE_PREFS" ]] && grep -q "PrefsProto" "$LORIE_PREFS" 2>/dev/null; then
+    info "检测到 LoriePreferences.PrefsProto，处理类型兼容性"
+
+    # 提取 PrefsProto.Preference 接口里声明的所有 abstract 方法
+    # 这些方法在 Prefs.Preference 里必须实现
+    # 常见的方法：get(), put(T), set(T), asList(), getKey() 等
+
+    # 检查 PrefsProto.Preference 是否有 abstract 方法需要实现
+    # 如果有，在 Prefs.Preference 里加上实现
+    PREFS_FILE="$XSERVER_DIR/src/main/java/com/winfex/xserver/Prefs.java"
+
+    # 检查 PrefsProto.Preference 定义了哪些方法
+    # 用 sed 提取 PrefsProto 接口块里的方法签名
+    PREFSPROTO_METHODS=$(sed -n '/interface PrefsProto/,/^    }/p' "$LORIE_PREFS" 2>/dev/null | \
+        grep -oE '[a-zA-Z<]+\s+[a-zA-Z]+\s*\([^)]*\)' | head -20 || echo "")
+
+    if [[ -n "$PREFSPROTO_METHODS" ]]; then
+        info "  PrefsProto.Preference 声明了以下方法:"
+        echo "$PREFSPROTO_METHODS" | sed 's/^/    /'
+    fi
+
+    # 让 Prefs.Preference 实现 LoriePreferences.PrefsProto.Preference
+    # 修改 Prefs.java 里 Preference 类的声明
+    if [[ -f "$PREFS_FILE" ]]; then
+        # 把 "public static class Preference<T> {" 改成 "public static class Preference<T> implements LoriePreferences.PrefsProto.Preference {"
+        # 但 PrefsProto.Preference 可能有泛型参数，需要小心
+        # 安全做法：先看 PrefsProto.Preference 的签名
+        PREFSPROTO_SIG=$(grep -E "interface Preference" "$LORIE_PREFS" 2>/dev/null | head -1 || echo "")
+
+        if echo "$PREFSPROTO_SIG" | grep -q "<"; then
+            # PrefsProto.Preference<T> 有泛型
+            info "  PrefsProto.Preference 是泛型接口，让 Prefs.Preference<T> implements LoriePreferences.PrefsProto.Preference<T>"
+            sed -i 's/public static class Preference<T> {/public static class Preference<T> implements LoriePreferences.PrefsProto.Preference<T> {/' "$PREFS_FILE"
+        else
+            # PrefsProto.Preference 无泛型（raw type）
+            info "  PrefsProto.Preference 无泛型，让 Prefs.Preference 实现 raw type"
+            sed -i 's/public static class Preference<T> {/public static class Preference<T> implements LoriePreferences.PrefsProto.Preference {/' "$PREFS_FILE"
+        fi
+        ok "  Prefs.Preference 已改为实现 LoriePreferences.PrefsProto.Preference"
+    fi
 fi
 
 # ===== Step 10: 尝试下载 MiceWine 的 Wine 兼容 patch =====
