@@ -20,7 +20,7 @@ ok()    { echo -e "${GREEN}[OK]${NC}   $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error() { echo -e "${RED}[ERR]${NC}  $*"; exit 1; }
 
-REF="main"
+REF="master"
 LOCAL_SRC=""
 
 while [[ $# -gt 0 ]]; do
@@ -61,7 +61,7 @@ else
         info "已存在 $TERMUX_X11_DIR，执行 git fetch"
         cd "$TERMUX_X11_DIR"
         git fetch --all --tags
-        git checkout "$REF" || error "checkout $REF 失败"
+        git checkout "$REF" || error "checkout $REF 失败（termux-x11 默认分支是 master，可以用 ./scripts/sync-xserver.sh master）"
         git pull --ff-only || warn "pull 失败（可能是 detached HEAD），继续"
         git submodule update --init --recursive
     else
@@ -73,8 +73,8 @@ else
             git clone --recurse-submodules \
                 https://github.com/termux/termux-x11.git "$TERMUX_X11_DIR"
             cd "$TERMUX_X11_DIR"
-            if [[ "$REF" != "main" ]]; then
-                git checkout "$REF" || warn "无法切到 $REF，保留 main"
+            if [[ "$REF" != "master" ]]; then
+                git checkout "$REF" || warn "无法切到 $REF，保留 master"
             fi
             git submodule update --init --recursive
         fi
