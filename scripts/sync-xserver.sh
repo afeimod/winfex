@@ -290,7 +290,7 @@ JAVA
     mv "$TMP_FILE" "$CMD_ENTRY"
     ok "  CmdEntryPoint.java 已替换为空壳（保留静态常量）"
     info "  提取到的常量:"
-    echo "$EXTRACTED_CONSTANTS" | grep -E 'static\s+final' | sed 's/^/    /'
+    echo "$EXTRACTED_CONSTANTS" | grep -E 'static\s+final' | sed 's/^/    /' || true
 else
     warn "  CmdEntryPoint.java 不存在，跳过"
 fi
@@ -871,26 +871,29 @@ if [[ -f "$LORIE_PREFS" ]] && grep -q "PrefsProto" "$LORIE_PREFS" 2>/dev/null; t
 
     if [[ -f "$PREFS_FILE" ]]; then
         # 检测 PrefsProto.Preference 是否有泛型参数
-        PREFSPROTO_SIG=$(echo "$PREFSPROTO_BLOCK" | grep -E "interface Preference|class Preference" | head -1 || echo "")
-        HAS_GENERIC=$(echo "$PREFSPROTO_SIG" | grep -c "<")
+        PREFSPROTO_SIG=$(echo "$PREFSPROTO_BLOCK" | grep -E "interface Preference|class Preference" | head -1 || true)
+        # grep -c 在 set -e + pipefail 下返回 1 会导致脚本退出，加 || true
+        HAS_GENERIC=$(echo "$PREFSPROTO_SIG" | grep -c "<" || true)
+        # 确保 HAS_GENERIC 是数字
+        HAS_GENERIC=${HAS_GENERIC:-0}
 
         if [[ "$PREFSPROTO_TYPE" == "interface" ]]; then
             # 用 implements
-            if [[ $HAS_GENERIC -gt 0 ]]; then
+            if [[ "$HAS_GENERIC" -gt 0 ]]; then
                 info "  PrefsProto.Preference<T> 是泛型接口，Prefs.Preference<T> implements LoriePreferences.PrefsProto.Preference<T>"
-                sed -i 's/public static class Preference<T> {/public static class Preference<T> implements LoriePreferences.PrefsProto.Preference<T> {/' "$PREFS_FILE"
+                sed -i 's/public static class Preference<T> {/public static class Preference<T> implements LoriePreferences.PrefsProto.Preference<T> {/' "$PREFS_FILE" || true
             else
                 info "  PrefsProto.Preference 是接口（无泛型），Prefs.Preference<T> implements raw type"
-                sed -i 's/public static class Preference<T> {/public static class Preference<T> implements LoriePreferences.PrefsProto.Preference {/' "$PREFS_FILE"
+                sed -i 's/public static class Preference<T> {/public static class Preference<T> implements LoriePreferences.PrefsProto.Preference {/' "$PREFS_FILE" || true
             fi
         elif [[ "$PREFSPROTO_TYPE" == "class" ]]; then
             # 用 extends（Java 不允许多继承，但 Prefs.Preference 目前没 extends 其他类）
-            if [[ $HAS_GENERIC -gt 0 ]]; then
+            if [[ "$HAS_GENERIC" -gt 0 ]]; then
                 info "  PrefsProto.Preference<T> 是抽象类，Prefs.Preference<T> extends LoriePreferences.PrefsProto.Preference<T>"
-                sed -i 's/public static class Preference<T> {/public static class Preference<T> extends LoriePreferences.PrefsProto.Preference<T> {/' "$PREFS_FILE"
+                sed -i 's/public static class Preference<T> {/public static class Preference<T> extends LoriePreferences.PrefsProto.Preference<T> {/' "$PREFS_FILE" || true
             else
                 info "  PrefsProto.Preference 是抽象类（无泛型），Prefs.Preference<T> extends raw type"
-                sed -i 's/public static class Preference<T> {/public static class Preference<T> extends LoriePreferences.PrefsProto.Preference {/' "$PREFS_FILE"
+                sed -i 's/public static class Preference<T> {/public static class Preference<T> extends LoriePreferences.PrefsProto.Preference {/' "$PREFS_FILE" || true
             fi
         else
             warn "  无法确定 PrefsProto.Preference 类型，跳过（可能编译失败）"
