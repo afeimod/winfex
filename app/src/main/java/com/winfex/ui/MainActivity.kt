@@ -43,7 +43,11 @@ class MainActivity : AppCompatActivity() {
         setSupportActionBar(toolbar)
         toolbar.setNavigationOnClickListener { drawer.openDrawer(GravityCompat.START) }
 
-        val navController = findNavController(R.id.nav_host)
+        // FragmentContainerView 作为 NavHost 时，需要通过 FragmentManager 获取 NavController
+        // 直接用 findNavController(R.id.nav_host) 会崩溃：
+        // "does not have a NavController set on <id>"
+        val navHostFragment = supportFragmentManager.findFragmentById(R.id.nav_host) as androidx.navigation.fragment.NavHostFragment
+        val navController = navHostFragment.navController
         val appBarConfig = AppBarConfiguration(
             setOf(
                 R.id.libraryFragment,
