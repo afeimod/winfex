@@ -3,7 +3,9 @@ package com.winfex.core
 import android.util.Log
 import com.winfex.native.NativeBridge
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
@@ -142,7 +144,9 @@ object ProcessExecutor {
     }
 
     private fun launchOnPipeReader(block: suspend () -> Unit) {
-        kotlinx.coroutines.GlobalScope.launch(pipeReaderDispatcher) { block() }
+        GlobalScope.launch(pipeReaderDispatcher) {
+            block()
+        }
     }
 }
 
@@ -155,7 +159,8 @@ object OsCompat {
         try {
             val pfd = android.os.ParcelFileDescriptor.fromFd(fd)
             try { android.system.Os.close(pfd.fileDescriptor) } catch (_: Throwable) {}
-            try { pfd.detach() } catch (_: Throwable) {}
+            // detach() 是 API 31+，用 close() 兜底
+            try { pfd.close() } catch (_: Throwable) {}
         } catch (_: Throwable) {}
     }
 }
