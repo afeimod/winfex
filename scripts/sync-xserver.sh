@@ -60,7 +60,8 @@ else
     if [[ -d "$TERMUX_X11_DIR/.git" ]]; then
         info "已存在 $TERMUX_X11_DIR，执行 git fetch"
         cd "$TERMUX_X11_DIR"
-        git fetch --all --tags
+        # --force 覆盖被远端更新的本地 tag（如 nightly）
+        git fetch --all --tags --force
         git checkout "$REF" || error "checkout $REF 失败（termux-x11 默认分支是 master，可以用 ./scripts/sync-xserver.sh master）"
         git pull --ff-only || warn "pull 失败（可能是 detached HEAD），继续"
         git submodule update --init --recursive
