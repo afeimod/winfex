@@ -227,8 +227,11 @@ if [[ -f "$CMD_ENTRY" ]]; then
 package com.winfex.xserver;
 
 import android.app.Service;
+import android.content.Context;
 import android.content.Intent;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.util.Log;
 
 /**
@@ -238,10 +241,7 @@ import android.util.Log;
  * 引用 Android hidden API (IActivityManager / ActivityThread / IIntentReceiver.Stub 等)。
  *
  * com.winfex 用 WineRunnerService 管理 X server 生命周期，不需要这套机制。
- * 但 MainActivity 引用了本类的静态常量（ACTION_START 等），所以保留常量声明。
- *
- * 注意：不实现 ICmdEntryInterface.Stub，因为不知道 AIDL 声明了哪些方法。
- * onBind 返回 null，表示不支持跨进程绑定（com.winfex 不需要）。
+ * 但 MainActivity / LoriePreferences 引用了本类的静态常量 + handler + sendBroadcast。
  */
 public class CmdEntryPoint extends Service {
     private static final String TAG = "CmdEntryPoint";
@@ -253,6 +253,26 @@ JAVA
     // 兜底常量
     public static final String EXTRA_XR_STORE_IN = "XR_STORE_IN";
     public static final String EXTRA_XR_STORE_OUT = "XR_STORE_OUT";
+
+    // LoriePreferences / MainActivity 引用的静态字段
+    public static final Handler handler = new Handler(Looper.getMainLooper());
+
+    // 静态 sendBroadcast（LoriePreferences 引用 CmdEntryPoint.sendBroadcast）
+    private static Context appContext = null;
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        appContext = getApplicationContext();
+    }
+
+    public static void sendBroadcast(Intent intent) {
+        if (appContext != null) {
+            appContext.sendBroadcast(intent);
+        } else {
+            Log.w(TAG, "sendBroadcast called before onCreate, intent dropped");
+        }
+    }
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -563,12 +583,12 @@ public class Prefs extends PreferenceDataStore {
     public final Preference<Boolean> showAdditionalKbd;
     public final Preference<Boolean> showIMEWhileExternalConnected;
     public final Preference<Boolean> dexMetaKeyCapture;
-    public final Preference<Integer> ekbarPosition;
+    public final Preference<String> ekbarPosition;
     public final Preference<Boolean> ekbarPositionIgnoreOrientation;
     public final Preference<Boolean> enableAccessibilityServiceAutomatically;
     public final Preference<String> extra_keys_config;
     public final Preference<Boolean> filterOutWinkey;
-    public final Preference<Integer> screenIdleTimeout;
+    public final Preference<String> screenIdleTimeout;
     public final Preference<Boolean> showMouseHelper;
     public final Preference<Boolean> showStylusClickOverride;
     public final Preference<Boolean> useTermuxEKBarBehaviour;
@@ -581,6 +601,15 @@ public class Prefs extends PreferenceDataStore {
     public final Preference<Boolean> pauseKeyInterceptingWithEsc;
     public final Preference<Boolean> scaleTouchpad;
     public final Preference<Boolean> Reseed;
+    // TouchInputHandler 引用的额外字段
+    public final Preference<Integer> capturedPointerSpeedFactor;
+    public final Preference<Boolean> stylusIsMouse;
+    public final Preference<String> stylusButtonContactModifierMode;
+    public final Preference<String> transformCapturedPointer;
+    public final Preference<Boolean> ignoreGamepadEvents;
+    // LorieView 引用的额外字段
+    public final Preference<String> displayFilteringMode;
+    public final Preference<Boolean> hardwareKbdScancodesWorkaround;
 
     // ListPreference 数据（asList 返回）
     public static class ListData {
@@ -650,12 +679,12 @@ public class Prefs extends PreferenceDataStore {
         showAdditionalKbd = new Preference<>(sp, "showAdditionalKbd", false, Boolean.class);
         showIMEWhileExternalConnected = new Preference<>(sp, "showIMEWhileExternalConnected", false, Boolean.class);
         dexMetaKeyCapture = new Preference<>(sp, "dexMetaKeyCapture", false, Boolean.class);
-        ekbarPosition = new Preference<>(sp, "ekbarPosition", 0, Integer.class);
+        ekbarPosition = new Preference<>(sp, "ekbarPosition", "0", String.class);
         ekbarPositionIgnoreOrientation = new Preference<>(sp, "ekbarPositionIgnoreOrientation", false, Boolean.class);
         enableAccessibilityServiceAutomatically = new Preference<>(sp, "enableAccessibilityServiceAutomatically", false, Boolean.class);
         extra_keys_config = new Preference<>(sp, "extra_keys_config", "", String.class);
         filterOutWinkey = new Preference<>(sp, "filterOutWinkey", false, Boolean.class);
-        screenIdleTimeout = new Preference<>(sp, "screenIdleTimeout", 0, Integer.class);
+        screenIdleTimeout = new Preference<>(sp, "screenIdleTimeout", "0", String.class);
         showMouseHelper = new Preference<>(sp, "showMouseHelper", false, Boolean.class);
         showStylusClickOverride = new Preference<>(sp, "showStylusClickOverride", false, Boolean.class);
         useTermuxEKBarBehaviour = new Preference<>(sp, "useTermuxEKBarBehaviour", false, Boolean.class);
@@ -668,6 +697,15 @@ public class Prefs extends PreferenceDataStore {
         pauseKeyInterceptingWithEsc = new Preference<>(sp, "pauseKeyInterceptingWithEsc", false, Boolean.class);
         scaleTouchpad = new Preference<>(sp, "scaleTouchpad", false, Boolean.class);
         Reseed = new Preference<>(sp, "Reseed", false, Boolean.class);
+        // TouchInputHandler 引用的额外字段
+        capturedPointerSpeedFactor = new Preference<>(sp, "capturedPointerSpeedFactor", 100, Integer.class);
+        stylusIsMouse = new Preference<>(sp, "stylusIsMouse", false, Boolean.class);
+        stylusButtonContactModifierMode = new Preference<>(sp, "stylusButtonContactModifierMode", "default", String.class);
+        transformCapturedPointer = new Preference<>(sp, "transformCapturedPointer", "default", String.class);
+        ignoreGamepadEvents = new Preference<>(sp, "ignoreGamepadEvents", false, Boolean.class);
+        // LorieView 引用的额外字段
+        displayFilteringMode = new Preference<>(sp, "displayFilteringMode", "default", String.class);
+        hardwareKbdScancodesWorkaround = new Preference<>(sp, "hardwareKbdScancodesWorkaround", false, Boolean.class);
 
         // 注册到 keys map
         keys.put("touchMode", touchMode);
@@ -702,6 +740,13 @@ public class Prefs extends PreferenceDataStore {
         keys.put("pauseKeyInterceptingWithEsc", pauseKeyInterceptingWithEsc);
         keys.put("scaleTouchpad", scaleTouchpad);
         keys.put("Reseed", Reseed);
+        keys.put("capturedPointerSpeedFactor", capturedPointerSpeedFactor);
+        keys.put("stylusIsMouse", stylusIsMouse);
+        keys.put("stylusButtonContactModifierMode", stylusButtonContactModifierMode);
+        keys.put("transformCapturedPointer", transformCapturedPointer);
+        keys.put("ignoreGamepadEvents", ignoreGamepadEvents);
+        keys.put("displayFilteringMode", displayFilteringMode);
+        keys.put("hardwareKbdScancodesWorkaround", hardwareKbdScancodesWorkaround);
     }
 
     // MainActivity 调用的方法
@@ -795,53 +840,62 @@ ok "  生成 winfex_fallback_strings.xml（含 35+ 个 fallback string）"
 
 # ===== Step 9.3: 处理 PrefsProto 类型兼容性 =====
 #
-# termux-x11 的 LoriePreferences.java 内部定义了 PrefsProto 接口，
-# PrefsProto.Preference 是 LoriePreferences 自己的 Preference 基类。
-# termux-x11 的 Prefs.kt 里 Preference 继承 PrefsProto.Preference。
+# termux-x11 的 LoriePreferences.java 内部定义了 PrefsProto，
+# PrefsProto.Preference 是一个抽象类或接口，termux-x11 的 Prefs.Preference 继承它。
+# 我们的 Prefs.Preference 需要同样继承/实现它，否则类型不兼容。
 #
-# 我们的 Prefs stub 用的是 Prefs.Preference，需要让它继承 LoriePreferences.PrefsProto.Preference。
-# 但 PrefsProto 在 LoriePreferences 内部，需要先检查它定义了哪些 abstract 方法。
+# 检测 PrefsProto.Preference 是 class 还是 interface，相应用 extends 或 implements。
 
 LORIE_PREFS="$XSERVER_DIR/src/main/java/com/winfex/xserver/LoriePreferences.java"
 if [[ -f "$LORIE_PREFS" ]] && grep -q "PrefsProto" "$LORIE_PREFS" 2>/dev/null; then
     info "检测到 LoriePreferences.PrefsProto，处理类型兼容性"
 
-    # 提取 PrefsProto.Preference 接口里声明的所有 abstract 方法
-    # 这些方法在 Prefs.Preference 里必须实现
-    # 常见的方法：get(), put(T), set(T), asList(), getKey() 等
-
-    # 检查 PrefsProto.Preference 是否有 abstract 方法需要实现
-    # 如果有，在 Prefs.Preference 里加上实现
     PREFS_FILE="$XSERVER_DIR/src/main/java/com/winfex/xserver/Prefs.java"
 
-    # 检查 PrefsProto.Preference 定义了哪些方法
-    # 用 sed 提取 PrefsProto 接口块里的方法签名
-    PREFSPROTO_METHODS=$(sed -n '/interface PrefsProto/,/^    }/p' "$LORIE_PREFS" 2>/dev/null | \
-        grep -oE '[a-zA-Z<]+\s+[a-zA-Z]+\s*\([^)]*\)' | head -20 || echo "")
-
-    if [[ -n "$PREFSPROTO_METHODS" ]]; then
-        info "  PrefsProto.Preference 声明了以下方法:"
-        echo "$PREFSPROTO_METHODS" | sed 's/^/    /'
+    # 检测 PrefsProto.Preference 是 interface 还是 abstract class
+    # 在 LoriePreferences.java 里找 "interface Preference" 或 "class Preference" 在 PrefsProto 块内
+    PREFSPROTO_TYPE=""
+    # 先找 PrefsProto 块的位置
+    PREFSPROTO_START=$(grep -n "interface PrefsProto\|class PrefsProto" "$LORIE_PREFS" | head -1 | cut -d: -f1)
+    if [[ -n "$PREFSPROTO_START" ]]; then
+        # 从 PrefsProto 开始往后找 Preference 的定义
+        PREFSPROTO_BLOCK=$(sed -n "${PREFSPROTO_START},/^    }/p" "$LORIE_PREFS" 2>/dev/null)
+        if echo "$PREFSPROTO_BLOCK" | grep -q "interface Preference"; then
+            PREFSPROTO_TYPE="interface"
+        elif echo "$PREFSPROTO_BLOCK" | grep -q "abstract class Preference\|class Preference"; then
+            PREFSPROTO_TYPE="class"
+        fi
     fi
 
-    # 让 Prefs.Preference 实现 LoriePreferences.PrefsProto.Preference
-    # 修改 Prefs.java 里 Preference 类的声明
-    if [[ -f "$PREFS_FILE" ]]; then
-        # 把 "public static class Preference<T> {" 改成 "public static class Preference<T> implements LoriePreferences.PrefsProto.Preference {"
-        # 但 PrefsProto.Preference 可能有泛型参数，需要小心
-        # 安全做法：先看 PrefsProto.Preference 的签名
-        PREFSPROTO_SIG=$(grep -E "interface Preference" "$LORIE_PREFS" 2>/dev/null | head -1 || echo "")
+    info "  PrefsProto.Preference 类型: ${PREFSPROTO_TYPE:-unknown}"
 
-        if echo "$PREFSPROTO_SIG" | grep -q "<"; then
-            # PrefsProto.Preference<T> 有泛型
-            info "  PrefsProto.Preference 是泛型接口，让 Prefs.Preference<T> implements LoriePreferences.PrefsProto.Preference<T>"
-            sed -i 's/public static class Preference<T> {/public static class Preference<T> implements LoriePreferences.PrefsProto.Preference<T> {/' "$PREFS_FILE"
+    if [[ -f "$PREFS_FILE" ]]; then
+        # 检测 PrefsProto.Preference 是否有泛型参数
+        PREFSPROTO_SIG=$(echo "$PREFSPROTO_BLOCK" | grep -E "interface Preference|class Preference" | head -1 || echo "")
+        HAS_GENERIC=$(echo "$PREFSPROTO_SIG" | grep -c "<")
+
+        if [[ "$PREFSPROTO_TYPE" == "interface" ]]; then
+            # 用 implements
+            if [[ $HAS_GENERIC -gt 0 ]]; then
+                info "  PrefsProto.Preference<T> 是泛型接口，Prefs.Preference<T> implements LoriePreferences.PrefsProto.Preference<T>"
+                sed -i 's/public static class Preference<T> {/public static class Preference<T> implements LoriePreferences.PrefsProto.Preference<T> {/' "$PREFS_FILE"
+            else
+                info "  PrefsProto.Preference 是接口（无泛型），Prefs.Preference<T> implements raw type"
+                sed -i 's/public static class Preference<T> {/public static class Preference<T> implements LoriePreferences.PrefsProto.Preference {/' "$PREFS_FILE"
+            fi
+        elif [[ "$PREFSPROTO_TYPE" == "class" ]]; then
+            # 用 extends（Java 不允许多继承，但 Prefs.Preference 目前没 extends 其他类）
+            if [[ $HAS_GENERIC -gt 0 ]]; then
+                info "  PrefsProto.Preference<T> 是抽象类，Prefs.Preference<T> extends LoriePreferences.PrefsProto.Preference<T>"
+                sed -i 's/public static class Preference<T> {/public static class Preference<T> extends LoriePreferences.PrefsProto.Preference<T> {/' "$PREFS_FILE"
+            else
+                info "  PrefsProto.Preference 是抽象类（无泛型），Prefs.Preference<T> extends raw type"
+                sed -i 's/public static class Preference<T> {/public static class Preference<T> extends LoriePreferences.PrefsProto.Preference {/' "$PREFS_FILE"
+            fi
         else
-            # PrefsProto.Preference 无泛型（raw type）
-            info "  PrefsProto.Preference 无泛型，让 Prefs.Preference 实现 raw type"
-            sed -i 's/public static class Preference<T> {/public static class Preference<T> implements LoriePreferences.PrefsProto.Preference {/' "$PREFS_FILE"
+            warn "  无法确定 PrefsProto.Preference 类型，跳过（可能编译失败）"
         fi
-        ok "  Prefs.Preference 已改为实现 LoriePreferences.PrefsProto.Preference"
+        ok "  Prefs.Preference 已改为继承 LoriePreferences.PrefsProto.Preference"
     fi
 fi
 
