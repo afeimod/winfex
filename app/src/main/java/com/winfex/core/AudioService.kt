@@ -1,6 +1,7 @@
 package com.winfex.core
 
 import android.util.Log
+import com.winfex.model.RatPackage
 import com.winfex.model.WinePrefix
 import java.io.File
 

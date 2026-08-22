@@ -10,8 +10,8 @@ import java.io.File
  *
  * 完全对齐 MiceWine MainActivity.installDXWrapper 的逻辑：
  *   - 根据 prefix.d3dxRenderer 选择 DXVK 或 WineD3D
- *   - 把对应包的 files/x64/* 复制到 drive_c/windows/system32/
- *   - 把 files/x32/* 复制到 drive_c/windows/syswow64/
+ *   - 把对应包的 files/x64/ 下的 DLL 复制到 drive_c/windows/system32/
+ *   - 把 files/x32/ 下的 DLL 复制到 drive_c/windows/syswow64/
  *   - VKD3D 总是安装（与 DXVK/WineD3D 共存）
  *
  * 应在每次启动游戏前调用一次（覆盖式拷贝），保证 prefix 中的 DLL 是最新选中的版本。

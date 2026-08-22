@@ -12,9 +12,9 @@ import java.io.File
  *     │   ├── Core-<uuid>/files/usr/{lib,bin,etc,...}
  *     │   ├── Wine-<uuid>/files/wine/{bin,lib/wine/{x86_64-unix,x86_64-windows,i386-unix,i386-windows},share/wine}
  *     │   ├── Box64-<uuid>/files/usr/bin/box64
- *     │   ├── DXVK-<uuid>/files/{x64,x32}/*.dll
- *     │   ├── VKD3D-<uuid>/files/{x64,x32}/*.dll
- *     │   ├── WineD3D-<uuid>/files/{x64,x32}/*.dll
+ *     │   ├── DXVK-<uuid>/files/{x64,x32}/  (.dll files)
+ *     │   ├── VKD3D-<uuid>/files/{x64,x32}/  (.dll files)
+ *     │   ├── WineD3D-<uuid>/files/{x64,x32}/  (.dll files)
  *     │   ├── VulkanDriver-<uuid>/files/usr/lib/libvulkan_freedreno.so
  *     │   └── WineUtils-<uuid>/files/wine-utils/{CoreFonts,DirectX,OpenAL,Addons}
  *     │

@@ -39,7 +39,7 @@ object InputController {
     val active: InputProfile? get() = _active
 
     /** 鼠标移动定时器（每 16ms 触发一次，约 60Hz） */
-    private val moveTimer = java.util.Timer("winfex-mouse-move", isDaemon = true)
+    private val moveTimer = java.util.Timer("winfex-mouse-move", true)
     private val activeMoves = java.util.concurrent.ConcurrentHashMap<String, Pair<Float, Float>>()
 
     init {

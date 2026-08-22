@@ -101,9 +101,8 @@ object ProcessExecutor {
     private data class Pipe(val readFd: Int, val writeFd: Int)
 
     private fun createPipe(): Pipe {
-        val fds = IntArray(2)
-        android.system.Os.pipe(fds)
-        return Pipe(fds[0], fds[1])
+        val pfd = android.system.ParcelFileDescriptor.createPipe()
+        return Pipe(pfd[0].fd, pfd[1].fd)
     }
 
     private fun closePipe(p: Pipe) {
@@ -113,7 +112,7 @@ object ProcessExecutor {
 
     private fun readPipeToLog(fd: Int, log: File, onLine: (String) -> Unit, session: Session) {
         try {
-            FileInputStream(fd).use { fis ->
+            FileInputStream(android.system.ParcelFileDescriptor.fromFd(fd).fileDescriptor).use { fis ->
                 val buf = ByteArray(4096)
                 val sb = StringBuilder()
                 FileOutputStream(log, true).use { fos ->

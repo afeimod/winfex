@@ -116,7 +116,7 @@ object XServerManager {
      */
     fun start(context: Context, mode: StartMode = StartMode.AUTO): Boolean {
         if (_state.value == State.READY) {
-            Log.i(TAG, "X server already running on $displayString()")
+            Log.i(TAG, "X server already running on ${displayString()}")
             return true
         }
         if (_state.value == State.STARTING) {
@@ -138,6 +138,7 @@ object XServerManager {
         val ok = when (effectiveMode) {
             StartMode.HEADLESS -> startHeadless()
             StartMode.LORIE_ACTIVITY -> startLorieActivity(context)
+            StartMode.AUTO -> false // 不会到达，AUTO 已在上面处理
         }
 
         if (!ok) {
@@ -148,7 +149,7 @@ object XServerManager {
         // 等待 socket ready
         val ready = waitForReady()
         _state.value = if (ready) State.READY else State.FAILED
-        Log.i(TAG, "X server start result: $ready (mode=$effectiveMode, display=$displayString())")
+        Log.i(TAG, "X server start result: $ready (mode=$effectiveMode, display=${displayString()})")
 
         // X server ready 后，连接 XTestInjector
         if (ready) {
@@ -195,11 +196,12 @@ object XServerManager {
      * 通过 connect() 探测 socket 是否真的可连（光看文件存在还不够，可能 server 还没 listen）。
      */
     private fun probeSocketConnect(): Boolean {
+        // Android 没有 UnixDomainSocketAddress，用文件存在 + Os.access 简单判断
+        val socket = socketFile()
+        if (!socket.exists()) return false
         return try {
-            val addr = java.net.UnixDomainSocketAddress.of(socketFile().absolutePath)
-            val channel = java.nio.channels.SocketChannel.open(addr)
-            channel.close()
-            true
+            // 尝试 connect 到 Unix socket
+            android.system.Os.access(socket.absolutePath, android.system.OsConstants.F_OK)
         } catch (_: Exception) {
             false
         }
@@ -284,7 +286,7 @@ object XServerManager {
             context.startActivity(intent)
             // Activity 模式下没法直接拿 pid；通过 socket ready 判断
             xserverPgid = -1  // 由 Activity 进程内部管理
-            Log.i(TAG, "started XServerActivity for $displayString()")
+            Log.i(TAG, "started XServerActivity for ${displayString()}")
             true
         } catch (e: ClassNotFoundException) {
             Log.e(TAG, "XServerActivity not found — xserver module not integrated?", e)

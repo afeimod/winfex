@@ -57,7 +57,7 @@ class WineRunnerService : Service() {
         }
 
         Thread({
-            ProcessExecutor.waitFor(pgid)
+            kotlinx.coroutines.runBlocking { ProcessExecutor.waitFor(pgid) }
             // Wine 退出后，给一个宽限期让其他会话能继续用 X server
             Thread.sleep(30_000)
             if (ProcessExecutor.runningSessions().isEmpty()) {

@@ -101,7 +101,6 @@ class ControlsEditorActivity : AppCompatActivity() {
 
         val btnAdd = MaterialButton(this).apply {
             text = "+ 元素"
-            style = com.google.android.material.R.style.Widget_Material3_Button
             setOnClickListener { showAddElementDialog(0.5f, 0.5f) }
         }
         val btnEdit = MaterialButton(this).apply {
