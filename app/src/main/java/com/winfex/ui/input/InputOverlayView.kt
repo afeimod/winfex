@@ -14,10 +14,12 @@ import com.winfex.model.Element
 import com.winfex.model.ElementType
 import com.winfex.model.InputProfile
 import com.winfex.model.Shape
+import kotlin.math.abs
 import kotlin.math.atan2
-import kotlin.math.hypot
-import kotlin.math.sin
 import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.round
+import kotlin.math.sin
 
 /**
  * 虚拟按键叠加层 —— 参考 Winlator InputControlsView。
@@ -273,10 +275,10 @@ class InputOverlayView @JvmOverloads constructor(
             val dy = y - cy
             val hit = when (element.shape) {
                 Shape.CIRCLE -> (dx * dx + dy * dy) <= r * r
-                Shape.SQUARE -> kotlin.math.abs(dx) <= r && kotlin.math.abs(dy) <= r
+                Shape.SQUARE -> abs(dx) <= r && abs(dy) <= r
                 Shape.RECT, Shape.ROUND_RECT -> {
                     val rw = r * 1.6f; val rh = r * 0.8f
-                    kotlin.math.abs(dx) <= rw && kotlin.math.abs(dy) <= rh
+                    abs(dx) <= rw && abs(dy) <= rh
                 }
             }
             if (hit) return Hit(element, cx, cy, r)
@@ -377,7 +379,7 @@ class InputOverlayView @JvmOverloads constructor(
     private enum class Direction4 { RIGHT, DOWN, LEFT, UP }
 
     private fun directionFromDelta(dx: Float, dy: Float): Direction4 {
-        return if (kotlin.math.abs(dx) > kotlin.math.abs(dy)) {
+        return if (abs(dx) > abs(dy)) {
             if (dx > 0) Direction4.RIGHT else Direction4.LEFT
         } else {
             if (dy > 0) Direction4.DOWN else Direction4.UP
@@ -438,8 +440,8 @@ class InputOverlayView @JvmOverloads constructor(
                 val relY = (y / h).coerceIn(0f, 1f)
                 // 吸附到 1/24 网格
                 val grid = 1f / 24
-                val snappedX = (kotlin.math.round(relX / grid) * grid)
-                val snappedY = (kotlin.math.round(relY / grid) * grid)
+                val snappedX = (round(relX / grid) * grid)
+                val snappedY = (round(relY / grid) * grid)
                 onElementMovedListener?.invoke(draggingElementId!!, snappedX, snappedY)
                 invalidate()
                 return true

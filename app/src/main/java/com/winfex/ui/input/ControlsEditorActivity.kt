@@ -119,9 +119,8 @@ class ControlsEditorActivity : AppCompatActivity() {
             setOnClickListener {
                 val id = selectedElementId ?: return@setOnClickListener
                 val current = profile ?: return@setOnClickListener
-                val updated: com.winfex.model.InputProfile = current.copy(elements = current.elements.filterNot { it.id == id })
-                profile = updated
-                overlay.setProfile(updated)
+                profile = current.copy(elements = current.elements.filterNot { it.id == id })
+                overlay.setProfile(profile)
                 selectedElementId = null
             }
         }
