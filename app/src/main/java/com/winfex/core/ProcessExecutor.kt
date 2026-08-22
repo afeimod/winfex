@@ -76,7 +76,7 @@ object ProcessExecutor {
         OsCompat.closeFd(stdoutPipe.writeFd)
         OsCompat.closeFd(stderrPipe.writeFd)
 
-        pipeReaderDispatcher.launch {
+        launchOnPipeReader {
             readPipeToLog(stdoutPipe.readFd, logFile, onLine, session)
             readPipeToLog(stderrPipe.readFd, logFile, onLine, session)
         }
@@ -101,7 +101,7 @@ object ProcessExecutor {
     private data class Pipe(val readFd: Int, val writeFd: Int)
 
     private fun createPipe(): Pipe {
-        val pfd = android.system.ParcelFileDescriptor.createPipe()
+        val pfd = android.os.ParcelFileDescriptor.createPipe()
         return Pipe(pfd[0].fd, pfd[1].fd)
     }
 
@@ -112,7 +112,7 @@ object ProcessExecutor {
 
     private fun readPipeToLog(fd: Int, log: File, onLine: (String) -> Unit, session: Session) {
         try {
-            FileInputStream(android.system.ParcelFileDescriptor.fromFd(fd).fileDescriptor).use { fis ->
+            FileInputStream(android.os.ParcelFileDescriptor.fromFd(fd).fileDescriptor).use { fis ->
                 val buf = ByteArray(4096)
                 val sb = StringBuilder()
                 FileOutputStream(log, true).use { fos ->
@@ -141,8 +141,8 @@ object ProcessExecutor {
         }
     }
 
-    private fun kotlinx.coroutines.CoroutineDispatcher.launch(block: suspend () -> Unit) {
-        kotlinx.coroutines.GlobalScope.launch(this) { block() }
+    private fun launchOnPipeReader(block: suspend () -> Unit) {
+        kotlinx.coroutines.GlobalScope.launch(pipeReaderDispatcher) { block() }
     }
 }
 
@@ -153,7 +153,7 @@ object OsCompat {
 
     fun closeFd(fd: Int) {
         try {
-            val pfd = android.system.ParcelFileDescriptor.fromFd(fd)
+            val pfd = android.os.ParcelFileDescriptor.fromFd(fd)
             try { android.system.Os.close(pfd.fileDescriptor) } catch (_: Throwable) {}
             try { pfd.detach() } catch (_: Throwable) {}
         } catch (_: Throwable) {}

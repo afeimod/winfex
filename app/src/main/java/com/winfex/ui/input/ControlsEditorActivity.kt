@@ -118,9 +118,8 @@ class ControlsEditorActivity : AppCompatActivity() {
             text = "删除选中"
             setOnClickListener {
                 val id = selectedElementId ?: return@setOnClickListener
-                profile = profile?.copy(
-                    elements = profile!!.elements.filterNot { it.id == id }
-                )
+                val current = profile ?: return@setOnClickListener
+                profile = current.copy(elements = current.elements.filterNot { it.id == id })
                 overlay.setProfile(profile)
                 selectedElementId = null
             }
