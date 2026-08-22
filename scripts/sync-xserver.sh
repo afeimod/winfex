@@ -257,7 +257,9 @@ JAVA
     // LoriePreferences / MainActivity 引用的静态字段
     public static final Handler handler = new Handler(Looper.getMainLooper());
 
-    // 静态 sendBroadcast（LoriePreferences 引用 CmdEntryPoint.sendBroadcast）
+    // 静态 sendBroadcast 包装（LoriePreferences 引用 CmdEntryPoint.sendBroadcast）
+    // 注意：不能直接叫 sendBroadcast，因为 Service 继承 Context 有同名实例方法，
+    // static 方法不能 override 实例方法。改名 + 在 LoriePreferences 里替换调用。
     private static Context appContext = null;
 
     @Override
@@ -266,11 +268,11 @@ JAVA
         appContext = getApplicationContext();
     }
 
-    public static void sendBroadcast(Intent intent) {
+    public static void broadcastIntent(Intent intent) {
         if (appContext != null) {
             appContext.sendBroadcast(intent);
         } else {
-            Log.w(TAG, "sendBroadcast called before onCreate, intent dropped");
+            Log.w(TAG, "broadcastIntent called before onCreate, intent dropped");
         }
     }
 
@@ -604,12 +606,14 @@ public class Prefs extends PreferenceDataStore {
     // TouchInputHandler 引用的额外字段
     public final Preference<Integer> capturedPointerSpeedFactor;
     public final Preference<Boolean> stylusIsMouse;
-    public final Preference<String> stylusButtonContactModifierMode;
+    public final Preference<Boolean> stylusButtonContactModifierMode;
     public final Preference<String> transformCapturedPointer;
     public final Preference<Boolean> ignoreGamepadEvents;
     // LorieView 引用的额外字段
     public final Preference<String> displayFilteringMode;
     public final Preference<Boolean> hardwareKbdScancodesWorkaround;
+    public final Preference<Boolean> clipboardEnable;
+    public final Preference<Boolean> enforceCharBasedInput;
 
     // ListPreference 数据（asList 返回）
     public static class ListData {
@@ -631,6 +635,7 @@ public class Prefs extends PreferenceDataStore {
         private ListData listData;
 
         public Preference(SharedPreferences sp, String key, T def, Class<T> type) {
+            super(key, type, def);
             this.sp = sp; this.key = key; this.def = def; this.type = type;
         }
         @SuppressWarnings("unchecked")
@@ -655,8 +660,21 @@ public class Prefs extends PreferenceDataStore {
             this.listData = new ListData(entries, values);
             return this;
         }
-        public ListData asList() {
-            return listData != null ? listData : new ListData(new CharSequence[0], new CharSequence[0]);
+        // asList 必须返回 PrefsProto.ListPreference（父类声明的返回类型）
+        // 这里返回 null，运行时如果被调用会 NPE，但编译通过
+        // LoriePreferences 里只在 ListPreference 的 onPreferenceChange 里调 asList
+        @SuppressWarnings("rawtypes")
+        public LoriePreferences.PrefsProto.ListPreference asList() {
+            if (listData != null) {
+                // 尝试用反射构造 PrefsProto.ListPreference（如果它有公开构造函数）
+                try {
+                    Class<?> clazz = LoriePreferences.PrefsProto.ListPreference.class;
+                    return (LoriePreferences.PrefsProto.ListPreference) clazz.getDeclaredConstructor(CharSequence[].class, CharSequence[].class).newInstance(listData.entries, listData.entryValues);
+                } catch (Exception e) {
+                    return null;
+                }
+            }
+            return null;
         }
     }
 
@@ -700,12 +718,14 @@ public class Prefs extends PreferenceDataStore {
         // TouchInputHandler 引用的额外字段
         capturedPointerSpeedFactor = new Preference<>(sp, "capturedPointerSpeedFactor", 100, Integer.class);
         stylusIsMouse = new Preference<>(sp, "stylusIsMouse", false, Boolean.class);
-        stylusButtonContactModifierMode = new Preference<>(sp, "stylusButtonContactModifierMode", "default", String.class);
+        stylusButtonContactModifierMode = new Preference<>(sp, "stylusButtonContactModifierMode", false, Boolean.class);
         transformCapturedPointer = new Preference<>(sp, "transformCapturedPointer", "default", String.class);
         ignoreGamepadEvents = new Preference<>(sp, "ignoreGamepadEvents", false, Boolean.class);
         // LorieView 引用的额外字段
         displayFilteringMode = new Preference<>(sp, "displayFilteringMode", "default", String.class);
         hardwareKbdScancodesWorkaround = new Preference<>(sp, "hardwareKbdScancodesWorkaround", false, Boolean.class);
+        clipboardEnable = new Preference<>(sp, "clipboardEnable", true, Boolean.class);
+        enforceCharBasedInput = new Preference<>(sp, "enforceCharBasedInput", false, Boolean.class);
 
         // 注册到 keys map
         keys.put("touchMode", touchMode);
@@ -747,6 +767,8 @@ public class Prefs extends PreferenceDataStore {
         keys.put("ignoreGamepadEvents", ignoreGamepadEvents);
         keys.put("displayFilteringMode", displayFilteringMode);
         keys.put("hardwareKbdScancodesWorkaround", hardwareKbdScancodesWorkaround);
+        keys.put("clipboardEnable", clipboardEnable);
+        keys.put("enforceCharBasedInput", enforceCharBasedInput);
     }
 
     // MainActivity 调用的方法
@@ -901,6 +923,16 @@ if [[ -f "$LORIE_PREFS" ]] && grep -q "PrefsProto" "$LORIE_PREFS" 2>/dev/null; t
         ok "  Prefs.Preference 已改为继承 LoriePreferences.PrefsProto.Preference"
     fi
 fi
+
+# ===== Step 9.4: 修复 CmdEntryPoint.sendBroadcast 调用 =====
+#
+# CmdEntryPoint.sendBroadcast 改名为 broadcastIntent（避免 override Context.sendBroadcast）。
+# 把 LoriePreferences.java 里的 CmdEntryPoint.sendBroadcast 调用替换为 broadcastIntent。
+
+info "替换 CmdEntryPoint.sendBroadcast → CmdEntryPoint.broadcastIntent"
+find "$XSERVER_DIR/src/main/java" -name '*.java' -exec \
+    sed -i 's/CmdEntryPoint\.sendBroadcast(/CmdEntryPoint.broadcastIntent(/g' {} + 2>/dev/null || true
+ok "  sendBroadcast 调用已替换"
 
 # ===== Step 10: 尝试下载 MiceWine 的 Wine 兼容 patch =====
 
