@@ -9,8 +9,7 @@ on:
         default: 'all'
 
 env:
-  NDK_VERSION: 'r26b'
-  ANDROID_PLATFORM: 'android-28'
+  ANDROID_PLATFORM: '28'
   ARCH: 'aarch64'
 
 jobs:
@@ -24,9 +23,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - uses: nttld/setup-ndk@v1
+      - uses: android-actions/setup-android@v3
         with:
-          ndk-version: ${{ env.NDK_VERSION }}
+          packages: "ndk;27.1.12297006"
       - name: Install build deps
         run: |
           sudo apt-get update -qq
@@ -39,7 +38,7 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           export NDK=${ANDROID_NDK_HOME}
           export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
-          export CC=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_PLATFORM#android}-clang
+          export CC=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_PLATFORM}-clang
           export CXX=$CC++
           export AR=$TOOLCHAIN/bin/aarch64-linux-android-ar
           export PKG_CONFIG_PATH=/tmp/core-install/lib/pkgconfig
@@ -62,7 +61,7 @@ jobs:
         run: |
           export NDK=${ANDROID_NDK_HOME}
           export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
-          export CC=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_PLATFORM#android}-clang
+          export CC=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_PLATFORM}-clang
           mkdir -p /tmp/core-install/usr/lib
           cat > /tmp/redirect.c <<'CEOF'
           #define _GNU_SOURCE
@@ -152,9 +151,9 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-      - uses: nttld/setup-ndk@v1
+      - uses: android-actions/setup-android@v3
         with:
-          ndk-version: ${{ env.NDK_VERSION }}
+          packages: "ndk;27.1.12297006"
       - name: Install build deps
         run: |
           sudo apt-get update -qq
@@ -171,7 +170,7 @@ jobs:
         run: |
           export NDK=${ANDROID_NDK_HOME}
           export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
-          export CC=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_PLATFORM#android}-clang
+          export CC=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_PLATFORM}-clang
           export CXX=$CC++
           export AR=$TOOLCHAIN/bin/aarch64-linux-android-ar
           export RANLIB=$TOOLCHAIN/bin/aarch64-linux-android-ranlib
@@ -209,16 +208,16 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: nttld/setup-ndk@v1
+      - uses: android-actions/setup-android@v3
         with:
-          ndk-version: ${{ env.NDK_VERSION }}
+          packages: "ndk;27.1.12297006"
       - name: Clone Box64
         run: git clone --depth 1 https://github.com/ptitSeb/box64.git /tmp/box64-src
       - name: Build Box64
         run: |
           export NDK=${ANDROID_NDK_HOME}
           export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
-          export CC=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_PLATFORM#android}-clang
+          export CC=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_PLATFORM}-clang
           export CXX=$CC++
           mkdir -p /tmp/box64-build && cd /tmp/box64-build
           cmake /tmp/box64-src \
@@ -254,9 +253,7 @@ jobs:
           pip3 install --user mako jinja2 pyyaml
       - name: Clone FEX-Emu
         run: |
-          git clone --depth 1 https://github.com/FEX-Emu/FEX.git /tmp/fex-src
-          cd /tmp/fex-src
-          git submodule update --init --depth 1 External/FEXCore
+          git clone --recurse-submodules --depth 1 https://github.com/FEX-Emu/FEX.git /tmp/fex-src
       - name: Build FEX as WoW64 DLL (libwow64fex.dll)
         run: |
           mkdir -p /tmp/fex-build-dll32 && cd /tmp/fex-build-dll32
@@ -305,9 +302,9 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-      - uses: nttld/setup-ndk@v1
+      - uses: android-actions/setup-android@v3
         with:
-          ndk-version: ${{ env.NDK_VERSION }}
+          packages: "ndk;27.1.12297006"
       - name: Install build deps
         run: |
           sudo apt-get update -qq
@@ -320,7 +317,7 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           export NDK=${ANDROID_NDK_HOME}
           export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
-          export CC=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_PLATFORM#android}-clang
+          export CC=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_PLATFORM}-clang
           export CXX=$CC++
           export CFLAGS="-fPIC -O2 -D__ANDROID__"
           cd /tmp/mesa-src

@@ -896,6 +896,34 @@ cat > "$FALLBACK_STRINGS" <<'XML'
     <string name="lorie_pref_display_resolution_exact">Display resolution (exact)</string>
     <string name="lorie_pref_display_resolution_custom">Display resolution (custom)</string>
     <string name="lorie_pref_reseed">Reseed</string>
+
+    <!-- MainActivity / LoriePreferences 用的额外 string -->
+    <string name="not_connected">Not connected</string>
+    <string name="preferences_button_text">Preferences</string>
+    <string name="help_button_text">Help</string>
+    <string name="exit_button_text">Exit</string>
+    <string name="lorie_pref_main">Main</string>
+    <string name="lorie_pref_output">Output</string>
+    <string name="lorie_pref_pointer">Pointer</string>
+    <string name="lorie_pref_kbd">Keyboard</string>
+    <string name="lorie_pref_other">Other</string>
+    <string name="lorie_pref_version">Version</string>
+    <string name="lorie_pref_clipboard">Clipboard</string>
+    <string name="lorie_pref_clipboard_enable">Enable clipboard sync</string>
+    <string name="lorie_pref_enforce_char_based_input">Enforce char-based input</string>
+    <string name="lorie_pref_display_filtering_mode">Display filtering mode</string>
+    <string name="lorie_pref_hardware_kbd_scancodes_workaround">Hardware keyboard scancodes workaround</string>
+    <string name="lorie_pref_captured_pointer_speed_factor">Captured pointer speed factor</string>
+    <string name="lorie_pref_stylus_is_mouse">Stylus is mouse</string>
+    <string name="lorie_pref_stylus_button_contact_modifier_mode">Stylus button contact modifier mode</string>
+    <string name="lorie_pref_transform_captured_pointer">Transform captured pointer</string>
+    <string name="lorie_pref_ignore_gamepad_events">Ignore gamepad events</string>
+    <string name="lorie_pref_show_ime_while_external_connected">Show IME while external keyboard connected</string>
+    <string name="lorie_pref_show_additional_kbd">Show additional keyboard</string>
+    <string name="lorie_pref_ekbar_position_ignore_orientation">EK bar position ignore orientation</string>
+    <string name="lorie_pref_force_orientation">Force orientation</string>
+    <string name="lorie_pref_opacity_ekbar">EK bar opacity</string>
+    <string name="lorie_pref_adjust_height_for_ek">Adjust height for EK</string>
 </resources>
 XML
 ok "  生成 winfex_fallback_strings.xml（含 35+ 个 fallback string）"
