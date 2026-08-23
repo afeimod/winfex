@@ -164,6 +164,7 @@ jobs:
           /* Minimal wordexp stub */
           #include <stdio.h>
           #include <stdlib.h>
+          #include <string.h>
           #include <wordexp.h>
           int wordexp(const char *restrict words, wordexp_t *restrict we, int flags) {
               if (!we) return -1;
