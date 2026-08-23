@@ -48,11 +48,26 @@ jobs:
       - name: Download and setup NDK
         run: |
           cd /home/runner/work/winfex/winfex/scripts
-          mkdir -p ndk
           wget -O /tmp/ndk.zip "$NDK_URL"
-          7z x /tmp/ndk.zip -o/tmp/ndk-tmp -snld || true
-          mv /tmp/ndk-tmp/*/ ndk/
-          ls ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang
+          # 用 unzip 解压（7z 对符号链接有问题）
+          cd /tmp && unzip -q ndk.zip -d ndk-tmp || true
+          # 找到解压出来的目录名
+          NDK_EXTRACTED=$(ls -d /tmp/ndk-tmp/android-ndk-*)
+          echo "NDK extracted to: $NDK_EXTRACTED"
+          # 移动到 scripts/ndk
+          mkdir -p /home/runner/work/winfex/winfex/scripts/ndk
+          cp -a "$NDK_EXTRACTED/." /home/runner/work/winfex/winfex/scripts/ndk/
+          # 验证关键文件存在
+          NDK_DIR=/home/runner/work/winfex/winfex/scripts/ndk
+          ls "$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/" | grep clang | head -5
+          # 找到正确的 clang 路径
+          CLANG=$(find "$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/" -name "aarch64-linux-android*-clang" | head -1)
+          echo "Found clang: $CLANG"
+          if [ -z "$CLANG" ]; then
+            echo "ERROR: aarch64 clang not found!"
+            ls "$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/" | head -20
+            exit 1
+          fi
 
       - name: Apply NDK patches
         run: |
@@ -104,15 +119,17 @@ jobs:
       - name: Install NDK
         run: |
           wget -q "https://dl.google.com/android/repository/android-ndk-r29-linux.zip" -O /tmp/ndk.zip
-          7z x /tmp/ndk.zip -o/tmp/ndk-tmp -snld || true
+          cd /tmp && unzip -q ndk.zip -d ndk-tmp || true
+          NDK_EXTRACTED=$(ls -d /tmp/ndk-tmp/android-ndk-*)
           mkdir -p /tmp/ndk
-          mv /tmp/ndk-tmp/*/ /tmp/ndk/
+          cp -a "$NDK_EXTRACTED/." /tmp/ndk/
       - name: Build Box64
         run: |
           NDK=/tmp/ndk
           TC=$NDK/toolchains/llvm/prebuilt/linux-x86_64
-          export CC="$TC/bin/aarch64-linux-android29-clang"
-          export CXX="$TC/bin/aarch64-linux-android29-clang++"
+          CLANG=$(find "$TC/bin/" -name "aarch64-linux-android*-clang" | head -1)
+          export CC="$CLANG"
+          export CXX="${CLANG}++"
           git clone --depth 1 https://github.com/ptitSeb/box64.git /tmp/box64-src
           mkdir -p /tmp/box64-build && cd /tmp/box64-build
           cmake /tmp/box64-src -DCMAKE_BUILD_TYPE=Release -DANDROID=1 -DBAD_SIGNAL=1 \
