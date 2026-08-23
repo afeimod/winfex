@@ -370,6 +370,18 @@ jobs:
             LDFLAGS="-L$PREFIX/lib" PKG_CONFIG_PATH=$PKG_CONFIG_PATH
           make -j$(nproc) && make install
 
+      - name: Install xcb-proto + xtrans
+        run: |
+          # xcb-proto (纯 XML + pkgconfig)
+          wget -q https://xorg.freedesktop.org/releases/individual/xcb/xcb-proto-1.17.0.tar.xz
+          tar xf xcb-proto-1.17.0.tar.xz && cd xcb-proto-1.17.0
+          ./configure --prefix=$PREFIX && make install
+          # xtrans
+          cd /tmp
+          wget -q https://xorg.freedesktop.org/releases/individual/lib/xtrans-1.5.0.tar.xz
+          tar xf xtrans-1.5.0.tar.xz && cd xtrans-1.5.0
+          ./configure --prefix=$PREFIX && make install
+
       - name: Build libxcb
         run: |
           wget -q https://xorg.freedesktop.org/releases/individual/lib/libxcb-1.17.0.tar.xz
@@ -397,6 +409,16 @@ jobs:
           tar xf libXext-1.3.6.tar.xz && cd libXext-1.3.6
           ./configure --host=aarch64-linux-android --prefix=$PREFIX \
             --enable-shared --disable-static --enable-malloc0returnsnull \
+            CFLAGS="-fPIC -O2" CPPFLAGS="-I$PREFIX/include" LDFLAGS="-L$PREFIX/lib" \
+            PKG_CONFIG_PATH=$PKG_CONFIG_PATH
+          make -j$(nproc) && make install
+
+      - name: Build libXfixes
+        run: |
+          wget -q https://xorg.freedesktop.org/releases/individual/lib/libXfixes-6.0.1.tar.xz
+          tar xf libXfixes-6.0.1.tar.xz && cd libXfixes-6.0.1
+          ./configure --host=aarch64-linux-android --prefix=$PREFIX \
+            --enable-shared --disable-static \
             CFLAGS="-fPIC -O2" CPPFLAGS="-I$PREFIX/include" LDFLAGS="-L$PREFIX/lib" \
             PKG_CONFIG_PATH=$PKG_CONFIG_PATH
           make -j$(nproc) && make install
