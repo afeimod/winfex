@@ -1,558 +1,137 @@
 name: Build Components
 
+# 直接使用 android-bionic-rootfs 项目的构建脚本
+# 构建 51 个包的完整 RootFS（含 PulseAudio / Vulkan / GStreamer / ALSA 等）
+
 on:
   workflow_dispatch:
     inputs:
-      components:
-        description: 'Components (rootfs,core,box64,all)'
+      arch:
+        description: 'Target architecture (aarch64)'
         type: string
-        default: 'all'
+        default: 'aarch64'
 
 env:
-  NDK_VERSION: 'r26b'
-  ANDROID_API: '29'
+  NDK_URL: 'https://dl.google.com/android/repository/android-ndk-r29-linux.zip'
 
 jobs:
-  rootfs:
-    name: Build RootFS
-    if: ${{ contains(inputs.components, 'rootfs') || contains(inputs.components, 'all') }}
+  build-rootfs:
+    name: Build Complete RootFS
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
-      - name: Create RootFS
+
+      - name: Install build deps
         run: |
-          ROOT=/tmp/rootfs
-          mkdir -p $ROOT/usr/{bin,lib,include,share,etc,tmp,var}
-          mkdir -p $ROOT/usr/lib/{pkgconfig,gstreamer-1.0,alsa-lib}
-          mkdir -p $ROOT/usr/share/{fonts,vulkan}
-          mkdir -p $ROOT/opt
-          mkdir -p $ROOT/home/xuser/{.wine,.cache,.config,.fex-emu,Desktop}
-          mkdir -p $ROOT/home/xuser/.wine/drive_c/windows/{system32,syswow64,Fonts}
-          mkdir -p $ROOT/home/xuser/.wine/dosdevices
-          mkdir -p $ROOT/etc/{fonts,xdg,tls}
-          mkdir -p $ROOT/tmp $ROOT/run $ROOT/dev/input
-          echo 'root:x:0:0:root:/home:/bin/sh' > $ROOT/etc/passwd
-          echo 'xuser:x:1000:1000:xuser:/home/xuser:/bin/sh' >> $ROOT/etc/passwd
-          echo 'root:x:0:' > $ROOT/etc/group
-          echo 'xuser:x:1000:' >> $ROOT/etc/group
-          echo '127.0.0.1 localhost' > $ROOT/etc/hosts
-          echo 'nameserver 8.8.8.8' > $ROOT/etc/resolv.conf
-          printf '<?xml version="1.0"?>\n<fontconfig>\n<dir>/data/data/com.winfex/files/imagefs/usr/share/fonts</dir>\n<cachedir>/data/data/com.winfex/files/imagefs/home/xuser/.cache/fontconfig</cachedir>\n</fontconfig>\n' > $ROOT/etc/fonts/fonts.conf
-          mkdir -p $ROOT/etc/tls/certs
-          echo '# stub' > $ROOT/etc/tls/openssl.cnf
-          echo '# stub' > $ROOT/etc/tls/cert.pem
-          mkdir -p $ROOT/.winfex
-          echo '1' > $ROOT/.winfex/imagefs_version
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            git wget p7zip-full build-essential ccache cmake meson ninja-build \
+            bzip2 xz-utils zstd libglib2.0-dev gperf python3 python3-pip \
+            gobject-introspection pkg-config autoconf automake libtool \
+            flex bison gettext
+          pip3 install --user meson mako jinja2 pyyaml
+
+      - name: Setup build environment
+        run: |
+          cd /home/runner/work/winfex/winfex/scripts
+          chmod +x build-rootfs-arch.sh
+          chmod +x generate-prefix.sh
+          chmod +x cross_file/cross-aarch64-meson.sh
+          # 修改 default.conf 中的路径适配 CI 环境
+          sed -i 's|ndkDir=.*|ndkDir="/home/runner/work/winfex/winfex/scripts/ndk"|' default.conf
+          sed -i 's|srcDir=.*|srcDir="/home/runner/work/winfex/winfex/scripts/src"|' default.conf
+          sed -i 's|pkgDir=.*|pkgDir="/home/runner/work/winfex/winfex/scripts/pkgs"|' default.conf
+          sed -i 's|prefix=.*|prefix="/tmp/bionic-prefix"|' default.conf
+          cat default.conf
+
+      - name: Download and setup NDK
+        run: |
+          cd /home/runner/work/winfex/winfex/scripts
+          mkdir -p ndk
+          wget -O /tmp/ndk.zip "$NDK_URL"
+          7z x /tmp/ndk.zip -o/tmp/ndk-tmp
+          mv /tmp/ndk-tmp/*/ ndk/
+          ls ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang
+
+      - name: Apply NDK patches
+        run: |
+          cd /home/runner/work/winfex/winfex/scripts
+          # 应用 NDK patches (需要先修改 @TERMUX_PREFIX@ 为实际 prefix)
+          NDK_SYSROOT="ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          PREFIX="/tmp/bionic-prefix"
+          for patch_file in ndk_patches/r29/*.patch; do
+            echo "Applying: $patch_file"
+            cd "$NDK_SYSROOT"
+            cat "$OLDPWD/$patch_file" | \
+              sed "s|@TERMUX_PREFIX@|${PREFIX}|g" | \
+              sed "s|@TERMUX_PREFIX_CLASSICAL@|${PREFIX}|g" | \
+              sed "s|@ROOTFS_PREFIX@|${PREFIX}|g" | \
+              sed "s|__TERMUX__|__ANDROID__|g" | \
+              patch --no-backup-if-mismatch -N -p1 || true
+            cd -
+          done
+          echo "NDK patches applied"
+
+      - name: Build all packages
+        run: |
+          cd /home/runner/work/winfex/winfex/scripts
+          # 构建 aarch64 架构的所有包
+          ./build-rootfs-arch.sh --arch aarch64 --build gstreamer
+          # gstreamer 依赖会自动拉入所有需要的包
+
       - name: Package RootFS
-        run: cd /tmp/rootfs && tar -cJf /tmp/rootfs-aarch64.tar.xz . && ls -lh /tmp/rootfs-aarch64.tar.xz
+        run: |
+          cd /tmp/bionic-prefix
+          tar -cJf /tmp/rootfs-aarch64.tar.xz .
+          ls -lh /tmp/rootfs-aarch64.tar.xz
+          echo "Contents:"
+          find . -name '*.so' | head -30
+          find . -name '*.so' | wc -l
+
       - uses: actions/upload-artifact@v4
         with:
           name: rootfs-aarch64
           path: /tmp/rootfs-aarch64.tar.xz
+          retention-days: 30
 
-  core:
-    name: Build Core (runtime libs)
-    if: ${{ contains(inputs.components, 'core') || contains(inputs.components, 'all') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup NDK
-        uses: nttld/setup-ndk@v1
-        id: ndk
-        with:
-          ndk-version: ${{ env.NDK_VERSION }}
-      - name: Install deps
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends python3 python3-pip meson ninja-build pkg-config autoconf automake libtool xutils-dev bison flex gettext cmake
-          pip3 install --user meson mako jinja2 pyyaml
-      - name: Set env
-        run: |
-          NDK="${{ steps.ndk.outputs.ndk-path }}"
-          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
-          echo "CC=$TC/bin/aarch64-linux-android${{ env.ANDROID_API }}-clang" >> $GITHUB_ENV
-          echo "CXX=$TC/bin/aarch64-linux-android${{ env.ANDROID_API }}-clang++" >> $GITHUB_ENV
-          echo "AR=$TC/bin/llvm-ar" >> $GITHUB_ENV
-          echo "PREFIX=/tmp/core-install" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=/tmp/core-install/lib/pkgconfig" >> $GITHUB_ENV
-          mkdir -p /tmp/core-install/lib /tmp/core-install/include
-
-      - name: Build android-shmem
-        run: |
-          mkdir -p /tmp/ashmem && cat > /tmp/ashmem/shmem.c <<'CEOF'
-          /* Minimal android-shmem — SysV shared memory via ashmem */
-          #include <stdio.h>
-          #include <stdlib.h>
-          #include <string.h>
-          #include <unistd.h>
-          #include <fcntl.h>
-          #include <errno.h>
-          #include <sys/ioctl.h>
-          #include <sys/mman.h>
-          #include <linux/ashmem.h>
-          #include <sys/ipc.h>
-          #include <sys/shm.h>
-
-          #define MAX_SHM 256
-          struct shm_entry { int shmid; int fd; void *addr; size_t size; };
-          static struct shm_entry entries[MAX_SHM];
-          static int entry_count = 0;
-
-          int shmget(key_t key, size_t size, int flags) {
-              int fd = open("/dev/ashmem", O_RDWR);
-              if (fd < 0) return -1;
-              if (ioctl(fd, ASHMEM_SET_SIZE, size) < 0) { close(fd); return -1; }
-              int shmid = fd;
-              if (entry_count < MAX_SHM) {
-                  entries[entry_count].shmid = shmid;
-                  entries[entry_count].fd = fd;
-                  entries[entry_count].addr = NULL;
-                  entries[entry_count].size = size;
-                  entry_count++;
-              }
-              return shmid;
-          }
-          void *shmat(int shmid, const void *addr, int flags) {
-              for (int i = 0; i < entry_count; i++) {
-                  if (entries[i].shmid == shmid) {
-                      void *p = mmap(NULL, entries[i].size, PROT_READ|PROT_WRITE, MAP_SHARED, entries[i].fd, 0);
-                      entries[i].addr = p;
-                      return p;
-                  }
-              }
-              return (void*)-1;
-          }
-          int shmdt(const void *addr) {
-              for (int i = 0; i < entry_count; i++) {
-                  if (entries[i].addr == addr) {
-                      munmap(entries[i].addr, entries[i].size);
-                      entries[i].addr = NULL;
-                      return 0;
-                  }
-              }
-              return -1;
-          }
-          int shmctl(int shmid, int cmd, struct shmid_ds *buf) {
-              if (cmd == IPC_RMID) {
-                  for (int i = 0; i < entry_count; i++) {
-                      if (entries[i].shmid == shmid) {
-                          close(entries[i].fd);
-                          entries[i] = entries[--entry_count];
-                          return 0;
-                      }
-                  }
-              }
-              if (cmd == IPC_STAT && buf) { memset(buf, 0, sizeof(*buf)); return 0; }
-              return 0;
-          }
-          CEOF
-          cat > /tmp/ashmem/shmem.h <<'HEOF'
-          #ifndef _SHMEM_H
-          #define _SHMEM_H
-          #include <sys/ipc.h>
-          #include <sys/shm.h>
-          #endif
-          HEOF
-          cd /tmp/ashmem && $CC -shared -fPIC -O2 -I. -o libandroid-shmem.so shmem.c
-          cp libandroid-shmem.so $PREFIX/lib/ && cp shmem.h $PREFIX/include/
-
-      - name: Build android-wordexp
-        run: |
-          mkdir -p /tmp/wordexp && cat > /tmp/wordexp/wordexp.c <<'CEOF'
-          /* Minimal wordexp stub */
-          #include <stdio.h>
-          #include <stdlib.h>
-          #include <string.h>
-          #include <wordexp.h>
-          int wordexp(const char *restrict words, wordexp_t *restrict we, int flags) {
-              if (!we) return -1;
-              we->we_wordc = 1;
-              we->we_wordv = malloc(2 * sizeof(char*));
-              we->we_wordv[0] = strdup(words);
-              we->we_wordv[1] = NULL;
-              we->we_offs = 0;
-              return 0;
-          }
-          void wordfree(wordexp_t *we) {
-              if (!we || !we->we_wordv) return;
-              for (size_t i = 0; i < we->we_wordc; i++) free(we->we_wordv[i]);
-              free(we->we_wordv);
-              we->we_wordv = NULL;
-              we->we_wordc = 0;
-          }
-          CEOF
-          cat > /tmp/wordexp/wordexp.h <<'HEOF'
-          #ifndef _WORDEXP_H
-          #define _WORDEXP_H
-          typedef struct { size_t we_wordc; char **we_wordv; size_t we_offs; } wordexp_t;
-          int wordexp(const char*, wordexp_t*, int);
-          void wordfree(wordexp_t*);
-          #define WRDE_NOCMD 1
-          #endif
-          HEOF
-          cd /tmp/wordexp && $CC -shared -fPIC -O2 -I. -o libandroid-wordexp.so wordexp.c
-          cp libandroid-wordexp.so $PREFIX/lib/ && cp wordexp.h $PREFIX/include/
-
-      - name: Build libredirect.so
-        run: |
-          mkdir -p /tmp/rd && cat > /tmp/rd/redirect.c <<'CEOF'
-          #define _GNU_SOURCE
-          #include <dlfcn.h>
-          #include <string.h>
-          #include <stdlib.h>
-          #include <stdio.h>
-          #include <unistd.h>
-          #include <fcntl.h>
-          #include <sys/stat.h>
-          #include <stdarg.h>
-          #include <dirent.h>
-          #include <limits.h>
-          #include <elf.h>
-          #include <sys/auxv.h>
-
-          static const char *IMAGEFS = NULL;
-          static int initialized = 0;
-
-          static void init_paths(void) {
-              if (initialized) return;
-              IMAGEFS = getenv("WINFEX_IMAGEFS");
-              if (!IMAGEFS) IMAGEFS = "/data/data/com.winfex/files/imagefs";
-              initialized = 1;
-          }
-
-          static const char* redirect_path(const char *path, char *buf, size_t bufsize) {
-              if (!path || path[0] != '/') return path;
-              init_paths();
-              if (!strncmp(path,"/proc/",6) || !strncmp(path,"/sys/",5) ||
-                  !strncmp(path,"/dev/",5) || !strncmp(path,"/system/",8) ||
-                  !strncmp(path,"/data/",6) || !strncmp(path,"/sdcard/",8) ||
-                  !strncmp(path,"/storage/",9)) return path;
-              if (!strncmp(path,"/usr/",5) || !strncmp(path,"/etc/",5) ||
-                  !strncmp(path,"/lib/",5) || !strncmp(path,"/lib64/",7) ||
-                  !strncmp(path,"/var/",5) || !strncmp(path,"/tmp/",5)) {
-                  snprintf(buf, bufsize, "%s%s", IMAGEFS, path);
-                  return buf;
-              }
-              return path;
-          }
-
-          static __thread char path_buf[PATH_MAX];
-
-          typedef int (*orig_open_t)(const char*, int, ...);
-          typedef int (*orig_openat_t)(int, const char*, int, ...);
-          typedef int (*orig_stat_t)(const char*, struct stat*);
-          typedef int (*orig_access_t)(const char*, int);
-          typedef ssize_t (*orig_readlink_t)(const char*, char*, size_t);
-          typedef char* (*orig_realpath_t)(const char*, char*);
-          typedef DIR* (*orig_opendir_t)(const char*);
-          typedef int (*orig_execve_t)(const char*, char* const[], char* const[]);
-
-          int open(const char *path, int flags, ...) {
-              static orig_open_t orig = NULL;
-              if (!orig) orig = (orig_open_t)dlsym(RTLD_NEXT, "open");
-              const char *p = redirect_path(path, path_buf, sizeof(path_buf));
-              if (flags & O_CREAT) { va_list a; va_start(a,flags); mode_t m=va_arg(a,mode_t); va_end(a); return orig(p,flags,m); }
-              return orig(p, flags);
-          }
-          int openat(int dirfd, const char *path, int flags, ...) {
-              static orig_openat_t orig = NULL;
-              if (!orig) orig = (orig_openat_t)dlsym(RTLD_NEXT, "openat");
-              const char *p = redirect_path(path, path_buf, sizeof(path_buf));
-              if (flags & O_CREAT) { va_list a; va_start(a,flags); mode_t m=va_arg(a,mode_t); va_end(a); return orig(dirfd,p,flags,m); }
-              return orig(dirfd, p, flags);
-          }
-          int stat(const char *path, struct stat *buf) {
-              static orig_stat_t orig = NULL;
-              if (!orig) orig = (orig_stat_t)dlsym(RTLD_NEXT, "stat");
-              return orig(redirect_path(path, path_buf, sizeof(path_buf)), buf);
-          }
-          int access(const char *path, int mode) {
-              static orig_access_t orig = NULL;
-              if (!orig) orig = (orig_access_t)dlsym(RTLD_NEXT, "access");
-              return orig(redirect_path(path, path_buf, sizeof(path_buf)), mode);
-          }
-          ssize_t readlink(const char *path, char *buf, size_t bufsize) {
-              static orig_readlink_t orig = NULL;
-              if (!orig) orig = (orig_readlink_t)dlsym(RTLD_NEXT, "readlink");
-              return orig(redirect_path(path, path_buf, sizeof(path_buf)), buf, bufsize);
-          }
-          char *realpath(const char *path, char *resolved) {
-              static orig_realpath_t orig = NULL;
-              if (!orig) orig = (orig_realpath_t)dlsym(RTLD_NEXT, "realpath");
-              return orig(redirect_path(path, path_buf, sizeof(path_buf)), resolved);
-          }
-          DIR *opendir(const char *path) {
-              static orig_opendir_t orig = NULL;
-              if (!orig) orig = (orig_opendir_t)dlsym(RTLD_NEXT, "opendir");
-              return orig(redirect_path(path, path_buf, sizeof(path_buf)));
-          }
-
-          /* 用户态 binfmt：拦截 execve，检测 x86 ELF magic，自动用 box64 翻译 */
-          int execve(const char *path, char *const argv[], char *const envp[]) {
-              static orig_execve_t orig = NULL;
-              if (!orig) orig = (orig_execve_t)dlsym(RTLD_NEXT, "execve");
-
-              /* 读 ELF magic */
-              int fd = open(path, O_RDONLY);
-              if (fd >= 0) {
-                  unsigned char magic[18];
-                  if (read(fd, magic, sizeof(magic)) == sizeof(magic)) {
-                      close(fd);
-                      /* 检测 ELF magic */
-                      if (magic[0]==0x7f && magic[1]=='E' && magic[2]=='L' && magic[3]=='F') {
-                          unsigned char class = magic[4];  /* 1=32bit, 2=64bit */
-                          unsigned char machine_lo = magic[18-2]; /* e_machine low byte */
-                          /* x86_64: class=2, machine=0x3e */
-                          /* i386:   class=1, machine=0x03 */
-                          if ((class==2 && machine_lo==0x3e) || (class==1 && machine_lo==0x03)) {
-                              /* x86 二进制 — 用 box64 翻译 */
-                              const char *box64 = getenv("WINFEX_BOX64");
-                              if (!box64) box64 = "/data/data/com.winfex/files/imagefs/usr/bin/box64";
-                              /* 构建新 argv: box64 + 原 path + 原 args */
-                              int argc = 0;
-                              while (argv[argc]) argc++;
-                              char **new_argv = malloc(sizeof(char*) * (argc + 2));
-                              new_argv[0] = (char*)box64;
-                              new_argv[1] = (char*)path;
-                              for (int i = 1; i < argc; i++) new_argv[1+i] = argv[i];
-                              new_argv[argc+1] = NULL;
-                              int ret = orig(box64, new_argv, envp);
-                              free(new_argv);
-                              return ret;
-                          }
-                      }
-                  } else { close(fd); }
-              }
-              return orig(path, argv, envp);
-          }
-          CEOF
-          $CC -shared -fPIC -O2 -Wall -o $PREFIX/lib/libredirect.so /tmp/rd/redirect.c -ldl
-          chmod 755 $PREFIX/lib/libredirect.so
-
-      - name: Install xorgproto + xorg-util-macros
-        run: |
-          git clone --depth 1 https://gitlab.freedesktop.org/xorg/proto/xorgproto.git /tmp/xorgproto
-          cd /tmp/xorgproto
-          mkdir -p $PREFIX/include/X11 $PREFIX/include/X11/extensions $PREFIX/include/pixman $PREFIX/include/KD
-          cp include/X11/*.h $PREFIX/include/X11/ 2>/dev/null || true
-          cp include/X11/extensions/*.h $PREFIX/include/X11/extensions/ 2>/dev/null || true
-          cp include/pixman/*.h $PREFIX/include/pixman/ 2>/dev/null || true
-          cp include/KD/*.h $PREFIX/include/KD/ 2>/dev/null || true
-          mkdir -p $PREFIX/lib/pkgconfig $PREFIX/share/aclocal
-          cp include/X11/*.h $PREFIX/include/X11/ 2>/dev/null || true
-          # pkg-config
-          for pc in xproto kbproto renderproto fixesproto damageproto xextproto compositeproto randrproto recordproto inputproto scrnsaverproto videoproto dri2proto dri3proto presentproto resourceproto fontsproto bigreqsproto xcmsproto evieproto trapproto xcmiscproto; do
-            echo "prefix=$PREFIX" > $PREFIX/lib/pkgconfig/$pc.pc
-            echo "exec_prefix=\${prefix}" >> $PREFIX/lib/pkgconfig/$pc.pc
-            echo "includedir=\${prefix}/include" >> $PREFIX/lib/pkgconfig/$pc.pc
-            echo "" >> $PREFIX/lib/pkgconfig/$pc.pc
-            echo "Name: $pc" >> $PREFIX/lib/pkgconfig/$pc.pc
-            echo "Description: X.org $pc" >> $PREFIX/lib/pkgconfig/$pc.pc
-            echo "Version: 2025.1" >> $PREFIX/lib/pkgconfig/$pc.pc
-            echo "Cflags: -I\${includedir}" >> $PREFIX/lib/pkgconfig/$pc.pc
-          done
-          # xorg-util-macros
-          wget -q https://xorg.freedesktop.org/releases/individual/util/util-macros-1.20.1.tar.xz
-          tar xf util-macros-1.20.1.tar.xz && cd util-macros-1.20.1
-          ./configure --prefix=$PREFIX && make install
-          # 验证
-          ls -la $PREFIX/include/X11/Xfuncproto.h
-
-      - name: Build libXau
-        run: |
-          wget -q https://xorg.freedesktop.org/releases/individual/lib/libXau-1.0.11.tar.xz
-          tar xf libXau-1.0.11.tar.xz && cd libXau-1.0.11
-          ./configure --host=aarch64-linux-android --prefix=$PREFIX \
-            --enable-shared --disable-static \
-            CFLAGS="-fPIC -O2" CPPFLAGS="-I$PREFIX/include" \
-            LDFLAGS="-L$PREFIX/lib" PKG_CONFIG_PATH=$PKG_CONFIG_PATH
-          make -j$(nproc) && make install
-
-      - name: Install xcb-proto + xtrans
-        run: |
-          # xcb-proto (纯 XML + pkgconfig)
-          wget -q https://xorg.freedesktop.org/releases/individual/xcb/xcb-proto-1.17.0.tar.xz
-          tar xf xcb-proto-1.17.0.tar.xz && cd xcb-proto-1.17.0
-          ./configure --prefix=$PREFIX && make install
-          # xtrans (纯头文件，交叉编译需要 --host)
-          cd /tmp
-          wget -q https://xorg.freedesktop.org/releases/individual/lib/xtrans-1.5.0.tar.xz
-          tar xf xtrans-1.5.0.tar.xz && cd xtrans-1.5.0
-          ./configure --host=aarch64-linux-android --prefix=$PREFIX \
-            CFLAGS="-fPIC -O2" CPPFLAGS="-I$PREFIX/include" \
-            LDFLAGS="-L$PREFIX/lib" PKG_CONFIG_PATH=$PKG_CONFIG_PATH
-          make install
-
-      - name: Build libxcb
-        run: |
-          wget -q https://xorg.freedesktop.org/releases/individual/lib/libxcb-1.17.0.tar.xz
-          tar xf libxcb-1.17.0.tar.xz && cd libxcb-1.17.0
-          ./configure --host=aarch64-linux-android --prefix=$PREFIX \
-            --enable-shared --disable-static \
-            CFLAGS="-fPIC -O2" CPPFLAGS="-I$PREFIX/include" \
-            LDFLAGS="-L$PREFIX/lib" PKG_CONFIG_PATH=$PKG_CONFIG_PATH
-          make -j$(nproc) && make install
-
-      - name: Build libX11
-        run: |
-          wget -q https://xorg.freedesktop.org/releases/individual/lib/libX11-1.8.9.tar.xz
-          tar xf libX11-1.8.9.tar.xz && cd libX11-1.8.9
-          ./configure --host=aarch64-linux-android --prefix=$PREFIX \
-            --enable-shared --disable-static --enable-malloc0returnsnull \
-            CFLAGS="-fPIC -O2" CPPFLAGS="-I$PREFIX/include" \
-            LDFLAGS="-L$PREFIX/lib -landroid-shmem" \
-            PKG_CONFIG_PATH=$PKG_CONFIG_PATH
-          make -j$(nproc) && make install
-
-      - name: Build libXext
-        run: |
-          wget -q https://xorg.freedesktop.org/releases/individual/lib/libXext-1.3.6.tar.xz
-          tar xf libXext-1.3.6.tar.xz && cd libXext-1.3.6
-          ./configure --host=aarch64-linux-android --prefix=$PREFIX \
-            --enable-shared --disable-static --enable-malloc0returnsnull \
-            CFLAGS="-fPIC -O2" CPPFLAGS="-I$PREFIX/include" LDFLAGS="-L$PREFIX/lib" \
-            PKG_CONFIG_PATH=$PKG_CONFIG_PATH
-          make -j$(nproc) && make install
-
-      - name: Build libXfixes
-        run: |
-          wget -q https://xorg.freedesktop.org/releases/individual/lib/libXfixes-6.0.1.tar.xz
-          tar xf libXfixes-6.0.1.tar.xz && cd libXfixes-6.0.1
-          ./configure --host=aarch64-linux-android --prefix=$PREFIX \
-            --enable-shared --disable-static \
-            CFLAGS="-fPIC -O2" CPPFLAGS="-I$PREFIX/include" LDFLAGS="-L$PREFIX/lib" \
-            PKG_CONFIG_PATH=$PKG_CONFIG_PATH
-          make -j$(nproc) && make install
-
-      - name: Build libXtst
-        run: |
-          wget -q https://xorg.freedesktop.org/releases/individual/lib/libXtst-1.2.4.tar.xz
-          tar xf libXtst-1.2.4.tar.xz && cd libXtst-1.2.4
-          ./configure --host=aarch64-linux-android --prefix=$PREFIX \
-            --enable-shared --disable-static --enable-malloc0returnsnull \
-            CFLAGS="-fPIC -O2" CPPFLAGS="-I$PREFIX/include" LDFLAGS="-L$PREFIX/lib" \
-            PKG_CONFIG_PATH=$PKG_CONFIG_PATH
-          make -j$(nproc) && make install
-
-      - name: Build libXi
-        run: |
-          wget -q https://xorg.freedesktop.org/releases/individual/lib/libXi-1.8.1.tar.xz
-          tar xf libXi-1.8.1.tar.xz && cd libXi-1.8.1
-          ./configure --host=aarch64-linux-android --prefix=$PREFIX \
-            --enable-shared --disable-static \
-            CFLAGS="-fPIC -O2" CPPFLAGS="-I$PREFIX/include" LDFLAGS="-L$PREFIX/lib" \
-            PKG_CONFIG_PATH=$PKG_CONFIG_PATH
-          make -j$(nproc) && make install
-
-      - name: Build libXrandr
-        run: |
-          wget -q https://xorg.freedesktop.org/releases/individual/lib/libXrandr-1.5.4.tar.xz
-          tar xf libXrandr-1.5.4.tar.xz && cd libXrandr-1.5.4
-          ./configure --host=aarch64-linux-android --prefix=$PREFIX \
-            --enable-shared --disable-static \
-            CFLAGS="-fPIC -O2" CPPFLAGS="-I$PREFIX/include" LDFLAGS="-L$PREFIX/lib" \
-            PKG_CONFIG_PATH=$PKG_CONFIG_PATH
-          make -j$(nproc) && make install
-
-      - name: Build libXrender
-        run: |
-          wget -q https://xorg.freedesktop.org/releases/individual/lib/libXrender-0.9.11.tar.xz
-          tar xf libXrender-0.9.11.tar.xz && cd libXrender-0.9.11
-          ./configure --host=aarch64-linux-android --prefix=$PREFIX \
-            --enable-shared --disable-static \
-            CFLAGS="-fPIC -O2" CPPFLAGS="-I$PREFIX/include" LDFLAGS="-L$PREFIX/lib" \
-            PKG_CONFIG_PATH=$PKG_CONFIG_PATH
-          make -j$(nproc) && make install
-
-      - name: Build libXcursor
-        run: |
-          wget -q https://xorg.freedesktop.org/releases/individual/lib/libXcursor-1.2.2.tar.xz
-          tar xf libXcursor-1.2.2.tar.xz && cd libXcursor-1.2.2
-          ./configure --host=aarch64-linux-android --prefix=$PREFIX \
-            --enable-shared --disable-static \
-            CFLAGS="-fPIC -O2" CPPFLAGS="-I$PREFIX/include" LDFLAGS="-L$PREFIX/lib" \
-            PKG_CONFIG_PATH=$PKG_CONFIG_PATH
-          make -j$(nproc) && make install
-
-      - name: Build libXinerama
-        run: |
-          wget -q https://xorg.freedesktop.org/releases/individual/lib/libXinerama-1.1.5.tar.xz
-          tar xf libXinerama-1.1.5.tar.xz && cd libXinerama-1.1.5
-          ./configure --host=aarch64-linux-android --prefix=$PREFIX \
-            --enable-shared --disable-static \
-            CFLAGS="-fPIC -O2" CPPFLAGS="-I$PREFIX/include" LDFLAGS="-L$PREFIX/lib" \
-            PKG_CONFIG_PATH=$PKG_CONFIG_PATH
-          make -j$(nproc) && make install
-
-      - name: Build libXcomposite
-        run: |
-          wget -q https://xorg.freedesktop.org/releases/individual/lib/libXcomposite-0.4.6.tar.xz
-          tar xf libXcomposite-0.4.6.tar.xz && cd libXcomposite-0.4.6
-          ./configure --host=aarch64-linux-android --prefix=$PREFIX \
-            --enable-shared --disable-static \
-            CFLAGS="-fPIC -O2" CPPFLAGS="-I$PREFIX/include" LDFLAGS="-L$PREFIX/lib" \
-            PKG_CONFIG_PATH=$PKG_CONFIG_PATH
-          make -j$(nproc) && make install
-
-      - name: Copy libc++_shared.so
-        run: |
-          NDK="${{ steps.ndk.outputs.ndk-path }}"
-          cp $NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so $PREFIX/lib/
-          chmod 755 $PREFIX/lib/libc++_shared.so
-
-      - name: Clean static libs
-        run: find $PREFIX -name '*.a' -delete && find $PREFIX -name '*.la' -delete
-
-      - name: Package Core
-        run: |
-          cd $PREFIX
-          tar -cJf /tmp/core-aarch64.tar.xz .
-          ls -lh /tmp/core-aarch64.tar.xz
-          echo "Contents:"
-          find . -name '*.so' -exec ls -lh {} \;
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: core-aarch64
-          path: /tmp/core-aarch64.tar.xz
-
-  box64:
+  build-box64:
     name: Build Box64
-    if: ${{ contains(inputs.components, 'box64') || contains(inputs.components, 'all') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Setup NDK
-        uses: nttld/setup-ndk@v1
-        id: ndk
-        with:
-          ndk-version: ${{ env.NDK_VERSION }}
+      - name: Install NDK
+        run: |
+          wget -q "https://dl.google.com/android/repository/android-ndk-r29-linux.zip" -O /tmp/ndk.zip
+          7z x /tmp/ndk.zip -o/tmp/ndk-tmp
+          mkdir -p /tmp/ndk
+          mv /tmp/ndk-tmp/*/ /tmp/ndk/
       - name: Build Box64
         run: |
-          NDK="${{ steps.ndk.outputs.ndk-path }}"
-          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
-          export CC="$TC/bin/aarch64-linux-android${{ env.ANDROID_API }}-clang"
-          export CXX="$TC/bin/aarch64-linux-android${{ env.ANDROID_API }}-clang++"
+          NDK=/tmp/ndk
+          TC=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+          export CC="$TC/bin/aarch64-linux-android29-clang"
+          export CXX="$TC/bin/aarch64-linux-android29-clang++"
           git clone --depth 1 https://github.com/ptitSeb/box64.git /tmp/box64-src
           mkdir -p /tmp/box64-build && cd /tmp/box64-build
-          cmake /tmp/box64-src -DCMAKE_BUILD_TYPE=Release -DANDROID=1 -DBAD_SIGNAL=1 -DARM_DYNAREC=ON \
+          cmake /tmp/box64-src -DCMAKE_BUILD_TYPE=Release -DANDROID=1 -DBAD_SIGNAL=1 \
+            -DARM_DYNAREC=ON -DNO_CONF_INSTALL=ON -DNO_LIB_INSTALL=ON \
             -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX
           make -j$(nproc) box64
-          mkdir -p /tmp/box64-pkg/usr/bin
-          cp box64 /tmp/box64-pkg/usr/bin/ && chmod 755 /tmp/box64-pkg/usr/bin/box64
+          mkdir -p /tmp/box64-pkg/local/bin
+          cp box64 /tmp/box64-pkg/local/bin/
+          chmod 755 /tmp/box64-pkg/local/bin/box64
       - name: Package Box64
-        run: cd /tmp/box64-pkg && tar -cJf /tmp/box64-aarch64.tar.xz . && ls -lh /tmp/box64-aarch64.tar.xz
+        run: cd /tmp/box64-pkg && tar -cJf /tmp/box64-aarch64.tar.xz .
       - uses: actions/upload-artifact@v4
         with:
           name: box64-aarch64
           path: /tmp/box64-aarch64.tar.xz
 
-  package:
-    name: Package All
-    needs: [rootfs, core, box64]
+  package-all:
+    name: Package All Components
+    needs: [build-rootfs, build-box64]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -562,7 +141,9 @@ jobs:
       - name: Organize
         run: |
           mkdir -p /tmp/components
-          for d in /tmp/artifacts/*/; do cp "$d"*.tar.xz /tmp/components/ 2>/dev/null || true; done
+          for d in /tmp/artifacts/*/; do
+            cp "$d"*.tar.xz /tmp/components/ 2>/dev/null || true
+          done
           ls -lh /tmp/components/
       - uses: actions/upload-artifact@v4
         with:
