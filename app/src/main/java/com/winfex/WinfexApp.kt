@@ -49,7 +49,7 @@ class WinfexApp : Application() {
         // 安装 ImageFS（首次启动时从 assets 解压 tar.xz，无 root）
         Thread({
             val ok = kotlinx.coroutines.runBlocking {
-                ImageFsInstaller.installIfNeeded(this)
+                ImageFsInstaller.installIfNeeded(this@WinfexApp)
             }
             if (ok) {
                 Log.i(TAG, "ImageFS installed successfully")
