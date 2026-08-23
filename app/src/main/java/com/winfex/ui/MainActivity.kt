@@ -16,7 +16,7 @@ import com.google.android.material.navigation.NavigationView
 import com.winfex.R
 import com.winfex.core.GameLibrary
 import com.winfex.core.InputController
-import com.winfex.core.RatPackageManager
+import com.winfex.core.ImageFsInstaller
 import com.winfex.core.ShortcutImporter
 import com.winfex.core.WinfexPaths
 import com.winfex.core.WinePrefixManager
@@ -91,7 +91,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkMissingPackages() {
-        val missing = RatPackageManager.missingCategories()
+        val missing = emptyList<String>()
         if (missing.isEmpty()) return
 
         lifecycleScope.launch(Dispatchers.Main) {
@@ -120,7 +120,7 @@ class MainActivity : AppCompatActivity() {
         sb.append("包名: com.winfex\n")
         sb.append("设备 ABI: ${WinfexPaths.deviceAbi}\n\n")
         sb.append("私有目录:\n${WinfexPaths.baseDir.absolutePath}\n\n")
-        val pkgs = RatPackageManager.packages.value
+        val pkgs = ImageFsInstaller.getComponentStatus()
         sb.append("已安装包: ${pkgs.size} 个\n")
         sb.append("已创建前缀: ${WinePrefixManager.prefixes.value.size} 个\n")
 

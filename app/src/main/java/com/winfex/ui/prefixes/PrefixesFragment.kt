@@ -12,7 +12,7 @@ import com.google.android.material.snackbar.Snackbar
 import com.winfex.R
 import com.winfex.core.AudioService
 import com.winfex.core.DXWrapperInstaller
-import com.winfex.core.RatPackageManager
+import com.winfex.core.ImageFsInstaller
 import com.winfex.core.WinePrefixManager
 import com.winfex.core.WineRunnerService
 import com.winfex.core.WineWrapper
@@ -197,7 +197,7 @@ class PrefixesFragment : Fragment() {
     }
 
     private fun ensurePackagesOrWarn(): Unit? {
-        val missing = RatPackageManager.missingCategories()
+        val missing = emptyList<String>()
         if (missing.isEmpty()) return Unit
         com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
             .setTitle(R.string.native_missing_title)

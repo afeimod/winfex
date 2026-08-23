@@ -124,6 +124,7 @@ dependencies {
 
     // Apache Commons Compress — 解压 .rat (tar.xz)
     implementation("org.apache.commons:commons-compress:1.26.2")
+    implementation("org.tukaani:xz:1.10")
 
     // DocumentFile / SAF
     implementation("androidx.documentfile:documentfile:1.0.1")

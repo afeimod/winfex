@@ -1,7 +1,6 @@
 package com.winfex.core
 
 import android.util.Log
-import com.winfex.model.RatPackage
 import com.winfex.model.WinePrefix
 import java.io.File
 
@@ -53,8 +52,10 @@ object AudioService {
             return startedPid
         }
 
-        val corePkg = RatPackageManager.selectedFor(RatPackage.CAT_CORE) ?: run {
-            Log.w(TAG, "Core 包未选中，无法启动 PulseAudio")
+        // 从 imagefs 找 pulseaudio
+        val paBin = File("${ImageFsInstaller.imagefsDir.absolutePath}/usr/bin/pulseaudio")
+        if (!paBin.exists()) {
+            Log.w(TAG, "pulseaudio not found in imagefs, skipping")
             return -1
         }
 

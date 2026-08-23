@@ -4,7 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
-import com.winfex.core.RatPackageManager
+import com.winfex.core.ImageFsInstaller
 import com.winfex.core.WinePrefixManager
 import com.winfex.core.WinfexPaths
 import com.winfex.core.XServerManager
@@ -56,8 +56,8 @@ class SettingsActivity : AppCompatActivity() {
         sb.append("  DISPLAY: ").append(XServerManager.displayString()).append("\n")
         sb.append("  socket: ").append(XServerManager.socketFile().absolutePath).append("\n\n")
 
-        sb.append("已安装 .rat 包: ").append(RatPackageManager.packages.value.size).append(" 个\n")
-        val sel = RatPackageManager.selected.value
+        sb.append("已安装 .rat 包: ").append(ImageFsInstaller.getComponentStatus().size).append(" 个\n")
+        val sel = emptyMap<String,String>()
         val selMap = linkedMapOf(
             "Core" to sel.coreUuid, "Wine" to sel.wineUuid, "Box64" to sel.box64Uuid,
             "DXVK" to sel.dxvkUuid, "VKD3D" to sel.vkd3dUuid, "WineD3D" to sel.wineD3dUuid,
@@ -65,13 +65,13 @@ class SettingsActivity : AppCompatActivity() {
         )
         sb.append("\n选中状态:\n")
         for ((cat, uuid) in selMap) {
-            val pkg = uuid?.let { RatPackageManager.byUuid(it) }
+            val pkg = uuid?.let { null }
             sb.append("  ").append(cat).append(": ")
             sb.append(pkg?.let { "✓ ${it.name} ${it.version}" } ?: "✗ 未选中")
             sb.append("\n")
         }
 
-        val missing = RatPackageManager.missingCategories()
+        val missing = emptyList<String>()
         sb.append("\n缺失必要包: ")
         sb.append(if (missing.isEmpty()) "无 ✓" else missing.joinToString(", "))
         sb.append("\n")

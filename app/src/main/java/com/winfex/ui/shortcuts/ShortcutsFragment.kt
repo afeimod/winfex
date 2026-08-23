@@ -15,7 +15,7 @@ import com.google.android.material.snackbar.Snackbar
 import com.winfex.R
 import com.winfex.core.AudioService
 import com.winfex.core.DXWrapperInstaller
-import com.winfex.core.RatPackageManager
+import com.winfex.core.ImageFsInstaller
 import com.winfex.core.ShortcutImporter
 import com.winfex.core.WinePrefixManager
 import com.winfex.core.WineRunnerService
@@ -105,11 +105,11 @@ class ShortcutsFragment : Fragment() {
             Snackbar.make(b.root, "前缀不存在", 3000).show()
             return
         }
-        if (RatPackageManager.missingCategories().isNotEmpty()) {
+        if (!ImageFsInstaller.isInstalled()) {
             MaterialAlertDialogBuilder(requireContext())
                 .setTitle(R.string.native_missing_title)
                 .setMessage(getString(R.string.native_missing_message,
-                    RatPackageManager.missingCategories().joinToString("\n\n") { "• $it" }))
+                    "ImageFS 未安装"))
                 .setPositiveButton(R.string.ok, null)
                 .show()
             return

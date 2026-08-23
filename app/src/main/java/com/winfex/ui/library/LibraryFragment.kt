@@ -12,7 +12,7 @@ import com.winfex.R
 import com.winfex.core.AudioService
 import com.winfex.core.DXWrapperInstaller
 import com.winfex.core.GameLibrary
-import com.winfex.core.RatPackageManager
+import com.winfex.core.ImageFsInstaller
 import com.winfex.core.WinePrefixManager
 import com.winfex.core.WineRunnerService
 import com.winfex.core.WineWrapper
@@ -89,11 +89,11 @@ class LibraryFragment : Fragment() {
                 .make(b.root, "前缀不存在", 3000).show()
             return
         }
-        if (RatPackageManager.missingCategories().isNotEmpty()) {
+        if (!ImageFsInstaller.isInstalled()) {
             com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
                 .setTitle(R.string.native_missing_title)
                 .setMessage(getString(R.string.native_missing_message,
-                    RatPackageManager.missingCategories().joinToString("\n\n") { "• $it" }))
+                    "ImageFS 未安装"))
                 .setPositiveButton(R.string.ok, null)
                 .show()
             return
