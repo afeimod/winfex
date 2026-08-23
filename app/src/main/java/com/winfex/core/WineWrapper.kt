@@ -139,6 +139,16 @@ object WineWrapper {
         )
     }
 
+    fun runRegedit(prefix: WinePrefix, onLine: (String) -> Unit): Int {
+        return launch(
+            LaunchParams(
+                prefix = prefix,
+                exePath = "regedit",
+                workdir = WinfexPaths.prefixDir(prefix.id).absolutePath
+            ), onLine
+        )
+    }
+
     // ===== env =====
 
     fun buildEnv(prefix: WinePrefix, useArm64EC: Boolean): Map<String, String> {
@@ -195,7 +205,7 @@ object WineWrapper {
         // DXVK
         env["DXVK_ASYNC"] = "1"
         env["DXVK_STATE_CACHE_PATH"] = "$imagefs/home/xuser/.cache/dxvk-shader-cache"
-        env["DXVK_HUD"] = prefix.dxvkHud.joinString(",")
+        env["DXVK_HUD"] = prefix.dxvkHud.joinToString(",")
 
         // VKD3D
         env["VKD3D_FEATURE_LEVEL"] = prefix.vkd3dFeatureLevel

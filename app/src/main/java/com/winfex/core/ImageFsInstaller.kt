@@ -14,7 +14,7 @@ import java.io.File
 import java.io.FileOutputStream
 
 /**
- * ImageFS 安装器 —— 从 assets/components/*.tar.xz 解压到 filesDir/imagefs/
+ * ImageFS 安装器 — 从 assets/components/ 下的 tar.xz 文件解压到 filesDir/imagefs/
  *
  * 替代旧的 RatPackageManager。不再需要用户手动导入 .rat 包，
  * 所有组件预编译后内置在 assets 里，首次启动自动解压。
@@ -23,7 +23,7 @@ import java.io.FileOutputStream
  *   core-aarch64.tar.xz    → imagefs/usr/{lib,bin,etc}
  *   wine-arm64ec.tar.xz    → imagefs/opt/wine/
  *   box64-aarch64.tar.xz   → imagefs/usr/bin/box64
- *   fex-aarch64.tar.xz     → imagefs/usr/bin/FEXLoader + etc/binfmt/
+ *   fex-aarch64.tar.xz     → imagefs/usr/bin/FEXLoader + etc/binfmt_config/
  *   turnip-aarch64.tar.xz  → imagefs/usr/lib/libvulkan_freedreno.so + etc/vulkan/
  *   rootfs-aarch64.tar.xz  → imagefs/{etc,home,usr/bin/start-container.sh,...}
  *

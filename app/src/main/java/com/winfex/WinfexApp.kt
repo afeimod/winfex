@@ -15,7 +15,7 @@ import com.winfex.native.NativeLoader
  *  1. 加载 libwinfex.so
  *  2. 初始化私有目录结构
  *  3. 挂全局崩溃捕获
- *  4. 安装 ImageFS（从 assets/components/*.tar.xz 解压，无 root）
+ *  4. 安装 ImageFS（从 assets/components/ 下的 tar.xz 解压，无 root）
  *  5. 初始化 XTestInjector
  *
  * 不需要 root：
