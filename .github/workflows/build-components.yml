@@ -376,11 +376,14 @@ jobs:
           wget -q https://xorg.freedesktop.org/releases/individual/xcb/xcb-proto-1.17.0.tar.xz
           tar xf xcb-proto-1.17.0.tar.xz && cd xcb-proto-1.17.0
           ./configure --prefix=$PREFIX && make install
-          # xtrans
+          # xtrans (纯头文件，交叉编译需要 --host)
           cd /tmp
           wget -q https://xorg.freedesktop.org/releases/individual/lib/xtrans-1.5.0.tar.xz
           tar xf xtrans-1.5.0.tar.xz && cd xtrans-1.5.0
-          ./configure --prefix=$PREFIX && make install
+          ./configure --host=aarch64-linux-android --prefix=$PREFIX \
+            CFLAGS="-fPIC -O2" CPPFLAGS="-I$PREFIX/include" \
+            LDFLAGS="-L$PREFIX/lib" PKG_CONFIG_PATH=$PKG_CONFIG_PATH
+          make install
 
       - name: Build libxcb
         run: |
