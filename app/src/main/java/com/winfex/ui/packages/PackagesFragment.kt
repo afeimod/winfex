@@ -39,7 +39,8 @@ class PackagesFragment : Fragment() {
                     b.installProgress.visibility = View.VISIBLE
                     b.tvInstallName.text = p.currentComponent
                     b.tvInstallMsg.text = p.message
-                    b.pbInstall.progress = p.percent
+                    val pct = if (p.totalCount > 0) (p.currentIndex * 100 / p.totalCount) else 0
+                    b.pbInstall.progress = pct
                 } else if (p.complete) {
                     b.installProgress.visibility = View.GONE
                     if (p.error != null) {

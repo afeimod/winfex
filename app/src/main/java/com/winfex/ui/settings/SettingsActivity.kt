@@ -56,25 +56,14 @@ class SettingsActivity : AppCompatActivity() {
         sb.append("  DISPLAY: ").append(XServerManager.displayString()).append("\n")
         sb.append("  socket: ").append(XServerManager.socketFile().absolutePath).append("\n\n")
 
-        sb.append("已安装 .rat 包: ").append(ImageFsInstaller.getComponentStatus().size).append(" 个\n")
-        val sel = emptyMap<String,String>()
-        val selMap = linkedMapOf(
-            "Core" to sel.coreUuid, "Wine" to sel.wineUuid, "Box64" to sel.box64Uuid,
-            "DXVK" to sel.dxvkUuid, "VKD3D" to sel.vkd3dUuid, "WineD3D" to sel.wineD3dUuid,
-            "VulkanDriver" to sel.vulkanDriverUuid, "WineUtils" to sel.wineUtilsUuid
-        )
-        sb.append("\n选中状态:\n")
-        for ((cat, uuid) in selMap) {
-            val pkg = uuid?.let { null }
-            sb.append("  ").append(cat).append(": ")
-            sb.append(pkg?.let { "✓ ${it.name} ${it.version}" } ?: "✗ 未选中")
+        sb.append("已安装组件: ").append(ImageFsInstaller.getComponentStatus().size).append(" 个\n")
+        sb.append("ImageFS 已安装: ").append(if (ImageFsInstaller.isInstalled()) "✓" else "✗").append("\n")
+        sb.append("\n组件状态:\n")
+        for (c in ImageFsInstaller.getComponentStatus()) {
+            sb.append("  ").append(c.displayName).append(": ")
+            sb.append(if (c.installed) "✓ 已安装" else "✗ 未安装")
             sb.append("\n")
         }
-
-        val missing = emptyList<String>()
-        sb.append("\n缺失必要包: ")
-        sb.append(if (missing.isEmpty()) "无 ✓" else missing.joinToString(", "))
-        sb.append("\n")
 
         sb.append("\nWine 前缀: ").append(WinePrefixManager.prefixes.value.size).append(" 个\n")
 

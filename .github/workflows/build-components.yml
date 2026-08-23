@@ -74,7 +74,7 @@ jobs:
           TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
           echo "CC=$TC/bin/aarch64-linux-android${{ env.ANDROID_API }}-clang" >> $GITHUB_ENV
           echo "CXX=$TC/bin/aarch64-linux-android${{ env.ANDROID_API }}-clang++" >> $GITHUB_ENV
-          echo "AR=$TC/bin/aarch64-linux-android-ar" >> $GITHUB_ENV
+          echo "AR=$TC/bin/llvm-ar" >> $GITHUB_ENV
           echo "PREFIX=/tmp/core-install" >> $GITHUB_ENV
           echo "PKG_CONFIG_PATH=/tmp/core-install/lib/pkgconfig" >> $GITHUB_ENV
           mkdir -p /tmp/core-install/lib /tmp/core-install/include
@@ -331,13 +331,26 @@ jobs:
           $CC -shared -fPIC -O2 -Wall -o $PREFIX/lib/libredirect.so /tmp/rd/redirect.c -ldl
           chmod 755 $PREFIX/lib/libredirect.so
 
-      - name: Build xorgproto
+      - name: Install xorgproto (headers only)
         run: |
           git clone --depth 1 https://gitlab.freedesktop.org/xorg/proto/xorgproto.git /tmp/xorgproto
-          cd /tmp/xorgproto && mkdir -p build && cd build
-          meson setup .. --prefix=$PREFIX --cross-file /dev/null -Ddefault_library=shared 2>/dev/null || \
-          meson setup .. --prefix=$PREFIX -Ddefault_library=shared
-          ninja install || true
+          cd /tmp/xorgproto
+          # xorgproto 是纯头文件包，直接复制
+          mkdir -p $PREFIX/include/X11 $PREFIX/include/X11/extensions $PREFIX/include/pixman
+          cp X11/*.h $PREFIX/include/X11/ 2>/dev/null || true
+          cp X11/extensions/*.h $PREFIX/include/X11/extensions/ 2>/dev/null || true
+          cp pixman/*.h $PREFIX/include/pixman/ 2>/dev/null || true
+          # 生成 pkg-config 文件
+          mkdir -p $PREFIX/lib/pkgconfig
+          echo 'prefix=/data/data/com.winfex/files/imagefs/usr' > $PREFIX/lib/pkgconfig/xproto.pc
+          echo 'exec_prefix=${prefix}' >> $PREFIX/lib/pkgconfig/xproto.pc
+          echo 'libdir=${exec_prefix}/lib' >> $PREFIX/lib/pkgconfig/xproto.pc
+          echo 'includedir=${prefix}/include' >> $PREFIX/lib/pkgconfig/xproto.pc
+          echo '' >> $PREFIX/lib/pkgconfig/xproto.pc
+          echo 'Name: Xproto' >> $PREFIX/lib/pkgconfig/xproto.pc
+          echo 'Description: X.org protocols headers' >> $PREFIX/lib/pkgconfig/xproto.pc
+          echo 'Version: 2025.1' >> $PREFIX/lib/pkgconfig/xproto.pc
+          echo 'Cflags: -I${includedir}' >> $PREFIX/lib/pkgconfig/xproto.pc
 
       - name: Build libXau
         run: |

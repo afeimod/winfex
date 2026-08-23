@@ -64,11 +64,6 @@ object AudioService {
         val preload = if (skcodec.exists()) skcodec.absolutePath else null
 
         val usrDir = WinfexPaths.usrDir.absolutePath
-        val paBin = "$usrDir/bin/pulseaudio"
-        if (!File(paBin).exists()) {
-            Log.w(TAG, "pulseaudio not found at $paBin")
-            return -1
-        }
 
         val env = mutableMapOf(
             "LD_LIBRARY_PATH" to "/system/lib64:$usrDir/lib",
