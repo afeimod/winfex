@@ -72,7 +72,6 @@ jobs:
       - name: Apply NDK patches
         run: |
           cd /home/runner/work/winfex/winfex/scripts
-          # 应用 NDK patches (需要先修改 @TERMUX_PREFIX@ 为实际 prefix)
           NDK_SYSROOT="ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
           PREFIX="/tmp/bionic-prefix"
           for patch_file in ndk_patches/r29/*.patch; do
@@ -83,10 +82,16 @@ jobs:
               sed "s|@TERMUX_PREFIX_CLASSICAL@|${PREFIX}|g" | \
               sed "s|@ROOTFS_PREFIX@|${PREFIX}|g" | \
               sed "s|__TERMUX__|__ANDROID__|g" | \
-              patch --no-backup-if-mismatch -N -p1 || true
+              patch --no-backup-if-mismatch -N -p0 2>/dev/null || \
+            cat "$OLDPWD/$patch_file" | \
+              sed "s|@TERMUX_PREFIX@|${PREFIX}|g" | \
+              sed "s|@TERMUX_PREFIX_CLASSICAL@|${PREFIX}|g" | \
+              sed "s|@ROOTFS_PREFIX@|${PREFIX}|g" | \
+              sed "s|__TERMUX__|__ANDROID__|g" | \
+              patch --no-backup-if-mismatch -N -p1 2>/dev/null || true
             cd -
           done
-          echo "NDK patches applied"
+          echo "NDK patches applied (non-fatal on individual failures)"
 
       - name: Build all packages
         run: |
