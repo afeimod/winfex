@@ -918,12 +918,6 @@ cat > "$FALLBACK_STRINGS" <<'XML'
     <string name="lorie_pref_stylus_button_contact_modifier_mode">Stylus button contact modifier mode</string>
     <string name="lorie_pref_transform_captured_pointer">Transform captured pointer</string>
     <string name="lorie_pref_ignore_gamepad_events">Ignore gamepad events</string>
-    <string name="lorie_pref_show_ime_while_external_connected">Show IME while external keyboard connected</string>
-    <string name="lorie_pref_show_additional_kbd">Show additional keyboard</string>
-    <string name="lorie_pref_ekbar_position_ignore_orientation">EK bar position ignore orientation</string>
-    <string name="lorie_pref_force_orientation">Force orientation</string>
-    <string name="lorie_pref_opacity_ekbar">EK bar opacity</string>
-    <string name="lorie_pref_adjust_height_for_ek">Adjust height for EK</string>
 </resources>
 XML
 ok "  生成 winfex_fallback_strings.xml（含 35+ 个 fallback string）"
