@@ -45,53 +45,48 @@ jobs:
           sed -i 's|prefix=.*|prefix="/tmp/bionic-prefix"|' default.conf
           cat default.conf
 
-      - name: Download and setup NDK
+      - name: Download NDK and apply patches
         run: |
           cd /home/runner/work/winfex/winfex/scripts
-          wget -O /tmp/ndk.zip "$NDK_URL"
-          # 用 unzip 解压（7z 对符号链接有问题）
-          cd /tmp && unzip -q ndk.zip -d ndk-tmp || true
-          # 找到解压出来的目录名
+          # 直接用参考项目的脚本下载 NDK + 应用补丁
+          # build-rootfs-arch.sh 会自动处理 NDK 下载 + 补丁应用
+          # 但需要先确保 default.conf 路径正确
+          # 修改 ndkURL 为 zip 格式（脚本内部用 7z 解压）
+          sed -i 's|ndkURL=.*|ndkURL="https://dl.google.com/android/repository/android-ndk-r29-linux.zip"|' default.conf
+          # 安装 7zip
+          sudo apt-get install -y p7zip-full
+          # 让脚本自己下载 NDK + 应用补丁
+          # 先跑 apply_ndk_patches 函数（它会自动下载 NDK + 打补丁）
+          # 用 source 方式加载脚本中的函数
+          source default.conf
+          # 手动下载 NDK（脚本用 7z，CI 上已安装）
+          mkdir -p "${ndkDir}"
+          wget -O /tmp/ndk.zip "${ndkURL}"
+          rm -rf /tmp/ndk-tmp
+          mkdir /tmp/ndk-tmp
+          7z x /tmp/ndk.zip -o/tmp/ndk-tmp -snld || true
+          # 找到解压目录并移动
           NDK_EXTRACTED=$(ls -d /tmp/ndk-tmp/android-ndk-*)
-          echo "NDK extracted to: $NDK_EXTRACTED"
-          # 移动到 scripts/ndk
-          mkdir -p /home/runner/work/winfex/winfex/scripts/ndk
-          cp -a "$NDK_EXTRACTED/." /home/runner/work/winfex/winfex/scripts/ndk/
-          # 验证关键文件存在
-          NDK_DIR=/home/runner/work/winfex/winfex/scripts/ndk
-          ls "$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/" | grep clang | head -5
-          # 找到正确的 clang 路径
-          CLANG=$(find "$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/" -name "aarch64-linux-android*-clang" | head -1)
-          echo "Found clang: $CLANG"
-          if [ -z "$CLANG" ]; then
-            echo "ERROR: aarch64 clang not found!"
-            ls "$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/" | head -20
-            exit 1
-          fi
-
-      - name: Apply NDK patches
-        run: |
-          cd /home/runner/work/winfex/winfex/scripts
-          NDK_SYSROOT="ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          PREFIX="/tmp/bionic-prefix"
-          for patch_file in ndk_patches/r29/*.patch; do
-            echo "Applying: $patch_file"
+          cp -a "$NDK_EXTRACTED/." "${ndkDir}/"
+          # 应用 NDK 补丁（完全按照参考项目的方式）
+          NDK_SYSROOT="${ndkDir}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          for _patch in ndk_patches/r29/*.patch; do
+            echo "Testing: $_patch"
             cd "$NDK_SYSROOT"
-            cat "$OLDPWD/$patch_file" | \
-              sed "s|@TERMUX_PREFIX@|${PREFIX}|g" | \
-              sed "s|@TERMUX_PREFIX_CLASSICAL@|${PREFIX}|g" | \
-              sed "s|@ROOTFS_PREFIX@|${PREFIX}|g" | \
-              sed "s|__TERMUX__|__ANDROID__|g" | \
-              patch --no-backup-if-mismatch -N -p0 2>/dev/null || \
-            cat "$OLDPWD/$patch_file" | \
-              sed "s|@TERMUX_PREFIX@|${PREFIX}|g" | \
-              sed "s|@TERMUX_PREFIX_CLASSICAL@|${PREFIX}|g" | \
-              sed "s|@ROOTFS_PREFIX@|${PREFIX}|g" | \
-              sed "s|__TERMUX__|__ANDROID__|g" | \
-              patch --no-backup-if-mismatch -N -p1 2>/dev/null || true
+            if patch -p1 --dry-run <"$OLDPWD/$_patch" >/dev/null 2>&1; then
+              echo "应用NDK补丁=> $_patch"
+              patch --no-backup-if-mismatch -N -p1 <<<"$(cat "$OLDPWD/$_patch" | sed "s|@TERMUX_PREFIX@|${prefix}|g" | sed "s|@TERMUX_PREFIX_CLASSICAL@|${prefix}|g" | sed "s|@ROOTFS_PREFIX@|${prefix}|g" | sed "s|__TERMUX__|__ANDROID__|g")" || { echo "NDK补丁应用失败=> $_patch" && exit 1; }
+            else
+              echo "跳过不匹配的补丁=> $_patch"
+            fi
             cd -
           done
-          echo "NDK patches applied (non-fatal on individual failures)"
+          echo "$prefix" > "${ndkDir}/.ndk_patches_state"
+          echo "NDK patches applied"
+          # 验证 clang 存在
+          CLANG=$(find "${ndkDir}/toolchains/llvm/prebuilt/linux-x86_64/bin/" -name "aarch64-linux-android*-clang" | head -1)
+          echo "Found clang: $CLANG"
+          [[ -z "$CLANG" ]] && { echo "ERROR: clang not found"; exit 1; }
 
       - name: Build all packages
         run: |
