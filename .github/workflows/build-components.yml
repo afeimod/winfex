@@ -50,7 +50,7 @@ jobs:
           cd /home/runner/work/winfex/winfex/scripts
           mkdir -p ndk
           wget -O /tmp/ndk.zip "$NDK_URL"
-          7z x /tmp/ndk.zip -o/tmp/ndk-tmp
+          7z x /tmp/ndk.zip -o/tmp/ndk-tmp -snld || true
           mv /tmp/ndk-tmp/*/ ndk/
           ls ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang
 
@@ -104,7 +104,7 @@ jobs:
       - name: Install NDK
         run: |
           wget -q "https://dl.google.com/android/repository/android-ndk-r29-linux.zip" -O /tmp/ndk.zip
-          7z x /tmp/ndk.zip -o/tmp/ndk-tmp
+          7z x /tmp/ndk.zip -o/tmp/ndk-tmp -snld || true
           mkdir -p /tmp/ndk
           mv /tmp/ndk-tmp/*/ /tmp/ndk/
       - name: Build Box64
