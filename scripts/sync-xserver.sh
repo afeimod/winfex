@@ -420,6 +420,45 @@ else
     ok "  res 文件包名替换完成"
 fi
 
+# ===== Step 8.2: 更新 xserver AndroidManifest.xml =====
+info "更新 xserver AndroidManifest.xml（注册所有 Activity/Service）"
+
+cat > "$XSERVER_DIR/src/main/AndroidManifest.xml" <<'XML'
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-feature android:glEsVersion="0x00020000" android:required="true" />
+
+    <application>
+        <activity
+            android:name=".MainActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode|navigation"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.Winfex" />
+
+        <activity
+            android:name=".XServerActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.Winfex" />
+
+        <service
+            android:name=".CmdEntryPoint"
+            android:exported="false" />
+
+        <activity
+            android:name=".LoriePreferences"
+            android:exported="false"
+            android:theme="@style/Theme.Winfex" />
+    </application>
+</manifest>
+XML
+ok "  AndroidManifest.xml 已更新"
+
 # ===== Step 9: 重写 xserver/build.gradle.kts =====
 
 info "更新 xserver/build.gradle.kts（加入 externalNativeBuild + 完整依赖）"

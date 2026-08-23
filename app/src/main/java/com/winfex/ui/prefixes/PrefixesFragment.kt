@@ -231,19 +231,51 @@ class PrefixesFragment : Fragment() {
 
     private fun runPrefix(cfg: com.winfex.model.WinePrefix) {
         viewLifecycleOwner.lifecycleScope.launch {
-            if (ensurePackagesOrWarn() == null) return@launch
+            // 检查 ImageFS 是否已安装
+            if (!com.winfex.core.ImageFsInstaller.isInstalled()) {
+                Snackbar.make(b.root, "ImageFS 正在安装中，请稍等...", 3000).show()
+                return@launch
+            }
             try {
-                // 启动前重新安装 DX 包装器（保证 DLL 是最新选中的版本）
-                DXWrapperInstaller.install(cfg)
-                AudioService.start(cfg) { }
-                val pgid = WineWrapper.launch(
-                    WineWrapper.LaunchParams(
+                // 同时启动 X Server + Wine 容器
+                // X Server 在 Activity 内运行，Wine 通过 ProcessBuilder 启动
+                val xReady = com.winfex.core.XServerManager.state.value == com.winfex.core.XServerManager.State.READY
+                if (!xReady) {
+                    Snackbar.make(b.root, "正在启动 X Server...", 2000).show()
+                    val xOk = com.winfex.core.XServerManager.start(requireContext(),
+                        com.winfex.core.XServerManager.StartMode.AUTO)
+                    if (!xOk) {
+                        MaterialAlertDialogBuilder(requireContext())
+                            .setTitle("X Server 启动失败")
+                            .setMessage("""
+                                可能原因：
+                                1. xserver module 未集成 — 跑 scripts/sync-xserver.sh
+                                2. libX11.so / libXtst.so 不在 imagefs/usr/lib/
+                                3. socket 冲突 — 重启应用
+
+                                日志: ${com.winfex.core.WinfexPaths.logsDir.absolutePath}
+                            """.trimIndent())
+                            .setPositiveButton(R.string.ok, null)
+                            .show()
+                        return@launch
+                    }
+                }
+
+                // 安装 DXVK DLL + 启动 PulseAudio
+                com.winfex.core.DXWrapperInstaller.install(cfg)
+                com.winfex.core.AudioService.start(cfg) { }
+
+                // 启动 Wine
+                // ARM64EC + FEX DLL 模式（无 root，性能最优）
+                // 如果 FEX DLL 不存在，自动回退到 Box64 模式
+                val pgid = com.winfex.core.WineWrapper.launch(
+                    com.winfex.core.WineWrapper.LaunchParams(
                         prefix = cfg,
                         exePath = "explorer",
                         arguments = "/desktop=shell"
                     )
                 ) { }
-                WineRunnerService.start(requireContext(), pgid, cfg.name)
+                com.winfex.core.WineRunnerService.start(requireContext(), pgid, cfg.name)
                 Snackbar.make(b.root, "已启动：${cfg.name} (pid=$pgid)", 3000).show()
             } catch (e: Exception) {
                 MaterialAlertDialogBuilder(requireContext())

@@ -52,7 +52,7 @@ object XServerManager {
     const val DEFAULT_DISPLAY_NUMBER = 13
 
     /** X server 启动后等待 ready 的超时时间（毫秒）。 */
-    private const val READY_TIMEOUT_MS = 10_000
+    private const val READY_TIMEOUT_MS = 30_000
 
     /** 探测间隔。 */
     private const val PROBE_INTERVAL_MS = 200L
@@ -274,18 +274,39 @@ object XServerManager {
      */
     private fun startLorieActivity(context: Context): Boolean {
         return try {
-            val className = "com.winfex.xserver.XServerActivity"
+            // 优先用 termux-x11 的 MainActivity（Lorie 真正的入口）
+            // 如果不存在，回退到 XServerActivity（stub）
+            val className = try {
+                Class.forName("com.winfex.xserver.MainActivity")
+                "com.winfex.xserver.MainActivity"
+            } catch (_: ClassNotFoundException) {
+                "com.winfex.xserver.XServerActivity"
+            }
             val cls = Class.forName(className)
+
+            // 确保 socket 目录存在
+            socketDir()
+
+            // 设置环境变量（LorieActivity 的 native 代码读这些变量决定 socket 路径）
+            // 注意：Activity 在同一个进程里运行，所以进程级环境变量有效
+            try {
+                val tmpDir = "${WinfexPaths.cacheDir.absolutePath}/tmp"
+                java.io.File(tmpDir).mkdirs()
+                android.system.Os.setenv("TMPDIR", tmpDir, true)
+                android.system.Os.setenv("DISPLAY", displayString(), true)
+                android.system.Os.setenv("XDG_RUNTIME_DIR", WinfexPaths.cacheDir.absolutePath, true)
+            } catch (e: Exception) {
+                Log.w(TAG, "setenv failed: ${e.message}")
+            }
+
             @Suppress("DEPRECATION")
             val intent = Intent(context, cls).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
                 addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
                 putExtra(EXTRA_DISPLAY_NUMBER, displayNumber)
             }
             context.startActivity(intent)
-            // Activity 模式下没法直接拿 pid；通过 socket ready 判断
-            xserverPgid = -1  // 由 Activity 进程内部管理
+            xserverPgid = -1
             Log.i(TAG, "started XServerActivity for ${displayString()}")
             true
         } catch (e: ClassNotFoundException) {

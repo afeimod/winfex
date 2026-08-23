@@ -135,8 +135,8 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
 
-    // X Server module（可选，需要先跑 scripts/sync-xserver.sh）
-    // 用 compileOnly 这样不集成 xserver module 也能编译通过；
-    // 集成后 XServerManager.startLorieActivity() 会通过反射找到 Activity。
-    compileOnly(project(":xserver"))
+    // X Server module
+    // 用 implementation 把 xserver 的类和 native 库打包进 APK
+    // 这样运行时 Class.forName("com.winfex.xserver.XServerActivity") 才能找到
+    implementation(project(":xserver"))
 }

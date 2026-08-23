@@ -1,0 +1,698 @@
+name: Build Components
+
+on:
+  workflow_dispatch:
+    inputs:
+      components:
+        description: 'Components to build (comma-separated: core,wine,box64,fex,turnip,rootfs,all)'
+        type: string
+        default: 'all'
+
+env:
+  NDK_VERSION: 'r26b'
+  NDK_SHA256: '0a8f51ab3a6a4a4d9f5e5c2e4c9b4c5f9c6a5b8e3d2c1a0b9c8d7e6f5a4b3c2d1'
+  ANDROID_PLATFORM: 'android-28'
+  ARCH: 'aarch64'
+
+jobs:
+  # ============================================================
+  # Core: 运行时库 (libc++, X11, PulseAudio, Zink, libredirect)
+  # ============================================================
+  core:
+    name: Build Core (runtime libs)
+    if: ${{ contains(inputs.components, 'core') || contains(inputs.components, 'all') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            python3 python3-pip meson ninja-build \
+            pkg-config autoconf automake libtool \
+            xutils-dev libxcb1-dev libx11-dev \
+            bison flex gettext
+          pip3 install --user meson mako jinja2 pyyaml
+
+      - name: Build libX11 + libXtst + libxcb
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          export NDK=${ANDROID_NDK_HOME}
+          export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+          export CC=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_PLATFORM#android}-clang
+          export CXX=$CC++
+          export AR=$TOOLCHAIN/bin/aarch64-linux-android-ar
+          export PKG_CONFIG_PATH=/tmp/core-install/lib/pkgconfig
+          export CFLAGS="-fPIC -O2"
+          mkdir -p /tmp/core-build /tmp/core-install
+
+          # libXau
+          git clone --depth 1 https://gitlab.freedesktop.org/xorg/lib/libxau.git /tmp/core-build/libxau
+          cd /tmp/core-build/libxau
+          ./autogen.sh --host=aarch64-linux-android --prefix=/tmp/core-install \
+            --enable-static --disable-shared
+          make -j$(nproc) && make install
+
+          # libxcb
+          git clone --depth 1 https://gitlab.freedesktop.org/xorg/lib/libxcb.git /tmp/core-build/libxcb
+          cd /tmp/core-build/libxcb
+          ./autogen.sh --host=aarch64-linux-android --prefix=/tmp/core-install \
+            --enable-static --disable-shared
+          make -j$(nproc) && make install
+
+          # libX11
+          git clone --depth 1 https://gitlab.freedesktop.org/xorg/lib/libx11.git /tmp/core-build/libx11
+          cd /tmp/core-build/libx11
+          ./autogen.sh --host=aarch64-linux-android --prefix=/tmp/core-install \
+            --enable-static --disable-shared
+          make -j$(nproc) && make install
+
+          # libXtst
+          git clone --depth 1 https://gitlab.freedesktop.org/xorg/lib/libxtst.git /tmp/core-build/libxtst
+          cd /tmp/core-build/libxtst
+          ./autogen.sh --host=aarch64-linux-android --prefix=/tmp/core-install \
+            --enable-static --disable-shared
+          make -j$(nproc) && make install
+
+      - name: Build libredirect.so (LD_PRELOAD path redirector)
+        run: |
+          export NDK=${ANDROID_NDK_HOME}
+          export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+          export CC=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_PLATFORM#android}-clang
+          mkdir -p /tmp/core-install/usr/lib
+
+          cat > /tmp/redirect.c <<'EOF'
+          // LD_PRELOAD path redirector — 把 /usr/lib /usr/bin 等重定向到 imagefs
+          #define _GNU_SOURCE
+          #include <dlfcn.h>
+          #include <string.h>
+          #include <stdlib.h>
+          #include <stdio.h>
+          #include <unistd.h>
+          #include <fcntl.h>
+          #include <sys/stat.h>
+          #include <stdarg.h>
+
+          static const char *IMAGEFS = NULL;
+          static int initialized = 0;
+
+          static void init() {
+              if (initialized) return;
+              IMAGEFS = getenv("WINFEX_IMAGEFS");
+              if (!IMAGEFS) IMAGEFS = "/data/data/com.winfex/files/imagefs";
+              initialized = 1;
+          }
+
+          static const char* redirect_path(const char *path) {
+              static __thread char buf[4096];
+              if (!path) return path;
+              init();
+
+              // 重定向 /usr/ → imagefs/usr/
+              if (strncmp(path, "/usr/", 5) == 0) {
+                  snprintf(buf, sizeof(buf), "%s/usr/%s", IMAGEFS, path + 5);
+                  return buf;
+              }
+              // 重定向 /etc/ → imagefs/etc/
+              if (strncmp(path, "/etc/", 5) == 0) {
+                  snprintf(buf, sizeof(buf), "%s/etc/%s", IMAGEFS, path + 5);
+                  return buf;
+              }
+              // 重定向 /lib/ → imagefs/usr/lib/
+              if (strncmp(path, "/lib/", 5) == 0) {
+                  snprintf(buf, sizeof(buf), "%s/usr/lib/%s", IMAGEFS, path + 5);
+                  return buf;
+              }
+              // 重定向 /lib64/ → imagefs/usr/lib/
+              if (strncmp(path, "/lib64/", 7) == 0) {
+                  snprintf(buf, sizeof(buf), "%s/usr/lib/%s", IMAGEFS, path + 7);
+                  return buf;
+              }
+              return path;
+          }
+
+          // 拦截 open/openat/stat/access 等
+          typedef int (*orig_open_t)(const char*, int, ...);
+          typedef int (*orig_openat_t)(int, const char*, int, ...);
+          typedef int (*orig_stat_t)(const char*, struct stat*);
+          typedef int (*orig_access_t)(const char*, int);
+
+          int open(const char *path, int flags, ...) {
+              static orig_open_t orig = NULL;
+              if (!orig) orig = (orig_open_t)dlsym(RTLD_NEXT, "open");
+              const char *p = redirect_path(path);
+              if (flags & O_CREAT) {
+                  va_list args; va_start(args, flags);
+                  mode_t mode = va_arg(args, mode_t); va_end(args);
+                  return orig(p, flags, mode);
+              }
+              return orig(p, flags);
+          }
+
+          int openat(int dirfd, const char *path, int flags, ...) {
+              static orig_openat_t orig = NULL;
+              if (!orig) orig = (orig_openat_t)dlsym(RTLD_NEXT, "openat");
+              const char *p = redirect_path(path);
+              if (flags & O_CREAT) {
+                  va_list args; va_start(args, flags);
+                  mode_t mode = va_arg(args, mode_t); va_end(args);
+                  return orig(dirfd, p, flags, mode);
+              }
+              return orig(dirfd, p, flags);
+          }
+
+          int stat(const char *path, struct stat *buf) {
+              static orig_stat_t orig = NULL;
+              if (!orig) orig = (orig_stat_t)dlsym(RTLD_NEXT, "stat");
+              return orig(redirect_path(path), buf);
+          }
+
+          int access(const char *path, int mode) {
+              static orig_access_t orig = NULL;
+              if (!orig) orig = (orig_access_t)dlsym(RTLD_NEXT, "access");
+              return orig(redirect_path(path), mode);
+          }
+          EOF
+
+          $CC -shared -fPIC -O2 -o /tmp/core-install/usr/lib/libredirect.so /tmp/redirect.c -ldl
+          chmod 755 /tmp/core-install/usr/lib/libredirect.so
+
+      - name: Build libc++_shared.so
+        run: |
+          cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so \
+             /tmp/core-install/usr/lib/
+
+      - name: Package Core tar.xz
+        run: |
+          mkdir -p /tmp/core-package/usr/lib /tmp/core-package/usr/bin /tmp/core-package/etc
+          cp -r /tmp/core-install/lib /tmp/core-package/usr/ 2>/dev/null || true
+          cp -r /tmp/core-install/usr/lib /tmp/core-package/usr/ 2>/dev/null || true
+          # 只保留 .so（不打包 .a）
+          find /tmp/core-package -name '*.a' -delete
+          find /tmp/core-package -name '*.la' -delete
+          cd /tmp/core-package
+          tar -cJf /tmp/core-aarch64.tar.xz .
+          ls -lh /tmp/core-aarch64.tar.xz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: core-aarch64
+          path: /tmp/core-aarch64.tar.xz
+          retention-days: 30
+
+  # ============================================================
+  # Wine: ARM64EC 原生编译
+  # ============================================================
+  wine:
+    name: Build Wine (arm64ec)
+    if: ${{ contains(inputs.components, 'wine') || contains(inputs.components, 'all') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            flex bison gcc-multilib g++-multilib \
+            libfreetype-dev libgl-dev libx11-dev libxext-dev \
+            libxrender-dev libxrandr-dev libxinerama-dev \
+            libxcomposite-dev libgstreamer1.0-dev \
+            libpulse-dev libgnutls28-dev libxcursor-dev \
+            libxi-dev libxxf86vm-dev libxfixes-dev
+
+      - name: Clone Wine
+        run: |
+          git clone --depth 1 --branch wine-9.0 https://gitlab.winehq.org/wine/wine.git /tmp/wine-src
+
+      - name: Build Wine for ARM64 (bionic)
+        run: |
+          export NDK=${ANDROID_NDK_HOME}
+          export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+          export CC=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_PLATFORM#android}-clang
+          export CXX=$CC++
+          export AR=$TOOLCHAIN/bin/aarch64-linux-android-ar
+          export RANLIB=$TOOLCHAIN/bin/aarch64-linux-android-ranlib
+          export CFLAGS="-fPIC -O2 -D__ANDROID__ -Wno-error"
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-L/tmp/core-install/usr/lib"
+
+          cd /tmp/wine-src
+          ./configure \
+            --host=aarch64-linux-android \
+            --prefix=/tmp/wine-install/wine \
+            --enable-archs=arm64ec,x86_64 \
+            --without-oss \
+            --disable-winemenubuilder \
+            --disable-win16 \
+            --disable-tests \
+            --with-x \
+            --with-pulse \
+            --with-gstreamer \
+            --with-opengl \
+            --with-gnutls \
+            --without-sdl \
+            --without-wayland \
+            --without-cups \
+            --without-usb \
+            --without-netapi \
+            --without-pcap \
+            --without-v4l2 \
+            --without-opencl \
+            --without-dbus \
+            --without-sane \
+            --without-udev
+
+          make -j$(nproc)
+          make install
+
+      - name: Package Wine tar.xz
+        run: |
+          cd /tmp/wine-install
+          tar -cJf /tmp/wine-arm64ec.tar.xz .
+          ls -lh /tmp/wine-arm64ec.tar.xz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wine-arm64ec
+          path: /tmp/wine-arm64ec.tar.xz
+          retention-days: 30
+
+  # ============================================================
+  # Box64: x86_64 → ARM64 翻译器（辅助）
+  # ============================================================
+  box64:
+    name: Build Box64
+    if: ${{ contains(inputs.components, 'box64') || contains(inputs.components, 'all') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+
+      - name: Clone Box64
+        run: git clone --depth 1 https://github.com/ptitSeb/box64.git /tmp/box64-src
+
+      - name: Build Box64
+        run: |
+          export NDK=${ANDROID_NDK_HOME}
+          export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+          export CC=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_PLATFORM#android}-clang
+          export CXX=$CC++
+
+          mkdir -p /tmp/box64-build
+          cd /tmp/box64-build
+          cmake /tmp/box64-src \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DANDROID=1 \
+            -DBAD_SIGNAL=1 \
+            -DARM_DYNAREC=ON \
+            -DCMAKE_C_COMPILER=$CC \
+            -DCMAKE_CXX_COMPILER=$CXX \
+            -DCMAKE_INSTALL_PREFIX=/tmp/box64-install
+
+          make -j$(nproc)
+          make install
+
+      - name: Package Box64 tar.xz
+        run: |
+          cd /tmp/box64-install
+          tar -cJf /tmp/box64-aarch64.tar.xz .
+          ls -lh /tmp/box64-aarch64.tar.xz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: box64-aarch64
+          path: /tmp/box64-aarch64.tar.xz
+          retention-days: 30
+
+  # ============================================================
+  # FEX-Emu: x86/x86_64 → ARM64 翻译器（主力，binfmt_misc 注册）
+  # ============================================================
+  fex:
+    name: Build FEX-Emu
+    if: ${{ contains(inputs.components, 'fex') || contains(inputs.components, 'all') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build clang llvm-dev libssl-dev \
+            python3 python3-pip libepoxy-dev
+          pip3 install --user mako jinja2 pyyaml
+
+      - name: Clone FEX-Emu
+        run: |
+          git clone --depth 1 https://github.com/FEX-Emu/FEX.git /tmp/fex-src
+          cd /tmp/fex-src
+          git submodule update --init --depth 1 External/FEXCore
+
+      - name: Build FEX
+        run: |
+          export NDK=${ANDROID_NDK_HOME}
+          export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+          export CC=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_PLATFORM#android}-clang
+          export CXX=$CC++
+
+          mkdir -p /tmp/fex-build
+          cd /tmp/fex-build
+          cmake /tmp/fex-src \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=$CC \
+            -DCMAKE_CXX_COMPILER=$CXX \
+            -DCMAKE_INSTALL_PREFIX=/tmp/fex-install \
+            -DENABLE_JIT=ON \
+            -DENABLE_LLD=OFF \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_THUNKS=OFF
+
+          make -j$(nproc) FEXLoader
+          make install
+
+      - name: Create FEX binfmt_misc registration script
+        run: |
+          mkdir -p /tmp/fex-install/etc/binfmt
+          cat > /tmp/fex-install/etc/binfmt/fex-aarch64.conf <<'EOF'
+          # binfmt_misc registration for FEX-Emu
+          # 注册 FEX 为 x86_64 ELF 翻译器
+          :fex-x86_64:M::\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00:\xff\xff\xff\xff\xff\xfe\xfe\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/data/data/com.winfex/files/imagefs/usr/bin/FEXLoader:F
+          # 注册 FEX 为 x86 ELF 翻译器
+          :fex-x86:M::\x7fELF\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x03\x00:\xff\xff\xff\xff\xff\xfe\xfe\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/data/data/com.winfex/files/imagefs/usr/bin/FEXLoader:F
+          EOF
+
+      - name: Create FEX config
+        run: |
+          mkdir -p /tmp/fex-install/etc/fex-emu
+          cat > /tmp/fex-install/etc/fex-emu/DefaultConfig.json <<'EOF'
+          {
+            "Config": {
+              "RootFSPath": "/data/data/com.winfex/files/imagefs/usr/share/fex-emu/RootFS",
+              "ThunkLibsPath": "/data/data/com.winfex/files/imagefs/usr/lib/fex-emu/ThunkLibs",
+              "AppDataPath": "/data/data/com.winfex/files/imagefs/home/.fex-emu",
+              "DumpBlockCoverage": false,
+              "SMCChecks": "none",
+              "ABIModeCheck": false,
+              "Multiblock": true,
+              "TSOEnabled": true,
+              "VectorTSOEnabled": true,
+              "HalfBarrierTSOEnabled": true,
+              "X87ReducedPrecision": false,
+              "EnableAVX": false
+            }
+          }
+          EOF
+
+      - name: Package FEX tar.xz
+        run: |
+          cd /tmp/fex-install
+          tar -cJf /tmp/fex-aarch64.tar.xz .
+          ls -lh /tmp/fex-aarch64.tar.xz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fex-aarch64
+          path: /tmp/fex-aarch64.tar.xz
+          retention-days: 30
+
+  # ============================================================
+  # VulkanDriver: Turnip (Mesa freedreno)
+  # ============================================================
+  turnip:
+    name: Build Turnip Driver
+    if: ${{ contains(inputs.components, 'turnip') || contains(inputs.components, 'all') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            python3 python3-pip meson ninja-build \
+            glslang-tools libdrm-dev
+          pip3 install --user meson mako pyyaml
+
+      - name: Clone Mesa
+        run: |
+          git clone --depth 1 --branch mesa-24.1.0 https://gitlab.freedesktop.org/mesa/mesa.git /tmp/mesa-src
+
+      - name: Build Turnip (vulkan-freedreno)
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          export NDK=${ANDROID_NDK_HOME}
+          export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+          export CC=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_PLATFORM#android}-clang
+          export CXX=$CC++
+          export CFLAGS="-fPIC -O2 -D__ANDROID__"
+          export CXXFLAGS="$CFLAGS"
+
+          cd /tmp/mesa-src
+          meson setup /tmp/mesa-build \
+            --prefix=/tmp/turnip-install \
+            --cross-file /tmp/meson-cross-aarch64-android.ini \
+            -Dgallium-drivers= \
+            -Dvulkan-drivers=freedreno \
+            -Dfreedreno-kmds=msm,kgsl \
+            -Dglvnd=disabled \
+            -Dplatforms= \
+            -Dllvm=disabled \
+            -Dopengl=false \
+            -Degl=disabled \
+            -Dzstd=enabled
+
+          meson compile -C /tmp/mesa-build
+          meson install -C /tmp/mesa-build
+
+      - name: Create Vulkan ICD JSON
+        run: |
+          mkdir -p /tmp/turnip-install/etc/vulkan
+          cat > /tmp/turnip-install/etc/vulkan/vulkan_icd.json <<'EOF'
+          {
+            "ICD": {
+              "api_version": "1.3.296",
+              "library_path": "/data/data/com.winfex/files/imagefs/usr/lib/libvulkan_freedreno.so"
+            },
+            "file_format_version": "1.0.0"
+          }
+          EOF
+
+      - name: Package Turnip tar.xz
+        run: |
+          cd /tmp/turnip-install
+          tar -cJf /tmp/turnip-aarch64.tar.xz .
+          ls -lh /tmp/turnip-aarch64.tar.xz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turnip-aarch64
+          path: /tmp/turnip-aarch64.tar.xz
+          retention-days: 30
+
+  # ============================================================
+  # RootFS: 最小 rootfs（支持 binfmt_misc）
+  # ============================================================
+  rootfs:
+    name: Build RootFS (binfmt_misc support)
+    if: ${{ contains(inputs.components, 'rootfs') || contains(inputs.components, 'all') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create RootFS structure
+        run: |
+          mkdir -p /tmp/rootfs/{usr/{bin,lib,share,etc,tmp,var},opt,home,etc/{fonts,xdg,tls},tmp,run,dev}
+
+          # 创建 /etc/passwd
+          cat > /tmp/rootfs/etc/passwd <<'EOF'
+          root:x:0:0:root:/home:/bin/sh
+          xuser:x:1000:1000:xuser:/home/xuser:/bin/sh
+          EOF
+
+          # 创建 /etc/group
+          cat > /tmp/rootfs/etc/group <<'EOF'
+          root:x:0:
+          xuser:x:1000:
+          EOF
+
+          # 创建 /etc/hosts
+          cat > /tmp/rootfs/etc/hosts <<'EOF'
+          127.0.0.1 localhost
+          EOF
+
+          # 创建 /etc/resolv.conf
+          cat > /tmp/rootfs/etc/resolv.conf <<'EOF'
+          nameserver 8.8.8.8
+          nameserver 8.8.4.4
+          EOF
+
+          # 创建 binfmt_misc 注册脚本
+          mkdir -p /tmp/rootfs/usr/bin
+          cat > /tmp/rootfs/usr/bin/register-binfmt.sh <<'SCRIPT'
+          #!/system/bin/sh
+          # 注册 FEX-Emu 为 x86/x86_64 ELF 翻译器
+          # 需要 root 权限
+
+          set -e
+
+          BINFMT_DIR="/proc/sys/fs/binfmt_misc"
+          FEX_PATH="/data/data/com.winfex/files/imagefs/usr/bin/FEXLoader"
+
+          # 检查 binfmt_misc 是否挂载
+          if [ ! -d "$BINFMT_DIR" ]; then
+              echo "挂载 binfmt_misc..."
+              mount -t binfmt_misc binfmt_misc "$BINFMT_DIR" 2>/dev/null || {
+                  echo "挂载失败，需要 root"
+                  echo "尝试: su -c 'mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc'"
+                  exit 1
+              }
+          fi
+
+          # 注册 x86_64 ELF
+          echo "注册 FEX 为 x86_64 ELF 翻译器..."
+          echo ":fex-x86_64:M::\\x7fELF\\x02\\x01\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x02\\x00\\x3e\\x00:\\xff\\xff\\xff\\xff\\xff\\xfe\\xfe\\x00\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xfe\\xff\\xff\\xff:$FEX_PATH:F" > "$BINFMT_DIR/register"
+
+          # 注册 x86 ELF
+          echo "注册 FEX 为 x86 ELF 翻译器..."
+          echo ":fex-x86:M::\\x7fELF\\x01\\x01\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x02\\x00\\x03\\x00:\\xff\\xff\\xff\\xff\\xff\\xfe\\xfe\\x00\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xfe\\xff\\xff\\xff:$FEX_PATH:F" > "$BINFMT_DIR/register"
+
+          echo "binfmt_misc 注册成功！"
+          echo "已注册的翻译器："
+          ls -la "$BINFMT_DIR/"
+          SCRIPT
+          chmod 755 /tmp/rootfs/usr/bin/register-binfmt.sh
+
+          # 创建 binfmt_misc 注销脚本
+          cat > /tmp/rootfs/usr/bin/unregister-binfmt.sh <<'SCRIPT'
+          #!/system/bin/sh
+          # 注销 FEX binfmt_misc 注册
+          echo -1 > /proc/sys/fs/binfmt_misc/fex-x86_64 2>/dev/null || true
+          echo -1 > /proc/sys/fs/binfmt_misc/fex-x86 2>/dev/null || true
+          echo "binfmt_misc 已注销"
+          SCRIPT
+          chmod 755 /tmp/rootfs/usr/bin/unregister-binfmt.sh
+
+          # 创建启动脚本（X server + Wine 同时启动）
+          cat > /tmp/rootfs/usr/bin/start-container.sh <<'SCRIPT'
+          #!/system/bin/sh
+          # 启动 Wine 容器（X server 已在 Activity 内运行）
+          # 用法: start-container.sh <exe_path> [args...]
+
+          set -e
+
+          IMAGEFS="/data/data/com.winfex/files/imagefs"
+          WINE_PREFIX="${IMAGEFS}/home/xuser/.wine"
+          WINE_BIN="${IMAGEFS}/opt/wine/bin/wine"
+
+          export HOME="${IMAGEFS}/home/xuser"
+          export USER="xuser"
+          export TMPDIR="${IMAGEFS}/usr/tmp"
+          export WINEPREFIX="$WINE_PREFIX"
+          export WINEARCH="win64"
+          export WINEDEBUG="-all"
+          export WINEESYNC=1
+          export WINEFSYNC=1
+          export WINEDLLOVERRIDES="mscoree,mshtml=d;winemenubuilder.exe=d"
+
+          export PATH="${IMAGEFS}/opt/wine/bin:${IMAGEFS}/usr/bin:/system/bin:/system/xbin"
+          export LD_LIBRARY_PATH="/system/lib64:${IMAGEFS}/usr/lib"
+          export LD_PRELOAD="${IMAGEFS}/usr/lib/libredirect.so"
+
+          export DISPLAY=":13"
+          export VK_ICD_FILENAMES="${IMAGEFS}/etc/vulkan/vulkan_icd.json"
+          export GALLIUM_DRIVER="zink"
+          export ZINK_DEBUG="compact"
+          export ZINK_DESCRIPTORS="lazy"
+
+          export DXVK_ASYNC=1
+          export DXVK_STATE_CACHE_PATH="${HOME}/.cache/dxvk-shader-cache"
+          export DXVK_HUD="fps,frametime"
+
+          # 确保输出到日志
+          LOG_FILE="${IMAGEFS}/../logs/wine-$(date +%s).log"
+          mkdir -p "${IMAGEFS}/../logs"
+
+          echo "=== Starting Wine container ===" | tee "$LOG_FILE"
+          echo "DISPLAY=$DISPLAY" | tee -a "$LOG_FILE"
+          echo "WINEPREFIX=$WINEPREFIX" | tee -a "$LOG_FILE"
+          echo "EXE=$1" | tee -a "$LOG_FILE"
+
+          # 执行 Wine（ARM64EC 原生，FEX 通过 binfmt_misc 自动翻译 x86 PE）
+          exec "$WINE_BIN" "$@" 2>&1 | tee -a "$LOG_FILE"
+          SCRIPT
+          chmod 755 /tmp/rootfs/usr/bin/start-container.sh
+
+      - name: Package RootFS tar.xz
+        run: |
+          cd /tmp/rootfs
+          tar -cJf /tmp/rootfs-aarch64.tar.xz .
+          ls -lh /tmp/rootfs-aarch64.tar.xz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rootfs-aarch64
+          path: /tmp/rootfs-aarch64.tar.xz
+          retention-days: 30
+
+  # ============================================================
+  # 打包所有组件到 assets 目录
+  # ============================================================
+  package-assets:
+    name: Package All Assets
+    needs: [core, wine, box64, fex, turnip, rootfs]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/artifacts
+
+      - name: Organize into assets structure
+        run: |
+          mkdir -p /tmp/assets/components
+          for dir in /tmp/artifacts/*/; do
+              name=$(basename "$dir")
+              if ls "$dir"/*.tar.xz 1>/dev/null 2>&1; then
+                  cp "$dir"/*.tar.xz /tmp/assets/components/
+                  echo "Copied: $name"
+              fi
+          done
+          ls -lh /tmp/assets/components/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: all-components
+          path: /tmp/assets/components/
+          retention-days: 90
