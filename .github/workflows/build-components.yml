@@ -81,13 +81,116 @@ jobs:
 
       - name: Build android-shmem
         run: |
-          git clone --depth 1 https://github.com/termux/android-shmem.git /tmp/ashmem
+          mkdir -p /tmp/ashmem && cat > /tmp/ashmem/shmem.c <<'CEOF'
+          /* Minimal android-shmem — SysV shared memory via ashmem */
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <unistd.h>
+          #include <fcntl.h>
+          #include <errno.h>
+          #include <sys/ioctl.h>
+          #include <sys/mman.h>
+          #include <linux/ashmem.h>
+          #include <sys/ipc.h>
+          #include <sys/shm.h>
+
+          #define MAX_SHM 256
+          struct shm_entry { int shmid; int fd; void *addr; size_t size; };
+          static struct shm_entry entries[MAX_SHM];
+          static int entry_count = 0;
+
+          int shmget(key_t key, size_t size, int flags) {
+              int fd = open("/dev/ashmem", O_RDWR);
+              if (fd < 0) return -1;
+              if (ioctl(fd, ASHMEM_SET_SIZE, size) < 0) { close(fd); return -1; }
+              int shmid = fd;
+              if (entry_count < MAX_SHM) {
+                  entries[entry_count].shmid = shmid;
+                  entries[entry_count].fd = fd;
+                  entries[entry_count].addr = NULL;
+                  entries[entry_count].size = size;
+                  entry_count++;
+              }
+              return shmid;
+          }
+          void *shmat(int shmid, const void *addr, int flags) {
+              for (int i = 0; i < entry_count; i++) {
+                  if (entries[i].shmid == shmid) {
+                      void *p = mmap(NULL, entries[i].size, PROT_READ|PROT_WRITE, MAP_SHARED, entries[i].fd, 0);
+                      entries[i].addr = p;
+                      return p;
+                  }
+              }
+              return (void*)-1;
+          }
+          int shmdt(const void *addr) {
+              for (int i = 0; i < entry_count; i++) {
+                  if (entries[i].addr == addr) {
+                      munmap(entries[i].addr, entries[i].size);
+                      entries[i].addr = NULL;
+                      return 0;
+                  }
+              }
+              return -1;
+          }
+          int shmctl(int shmid, int cmd, struct shmid_ds *buf) {
+              if (cmd == IPC_RMID) {
+                  for (int i = 0; i < entry_count; i++) {
+                      if (entries[i].shmid == shmid) {
+                          close(entries[i].fd);
+                          entries[i] = entries[--entry_count];
+                          return 0;
+                      }
+                  }
+              }
+              if (cmd == IPC_STAT && buf) { memset(buf, 0, sizeof(*buf)); return 0; }
+              return 0;
+          }
+          CEOF
+          cat > /tmp/ashmem/shmem.h <<'HEOF'
+          #ifndef _SHMEM_H
+          #define _SHMEM_H
+          #include <sys/ipc.h>
+          #include <sys/shm.h>
+          #endif
+          HEOF
           cd /tmp/ashmem && $CC -shared -fPIC -O2 -I. -o libandroid-shmem.so shmem.c
           cp libandroid-shmem.so $PREFIX/lib/ && cp shmem.h $PREFIX/include/
 
       - name: Build android-wordexp
         run: |
-          git clone --depth 1 https://github.com/termux/libandroid-wordexp.git /tmp/wordexp
+          mkdir -p /tmp/wordexp && cat > /tmp/wordexp/wordexp.c <<'CEOF'
+          /* Minimal wordexp stub */
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <wordexp.h>
+          int wordexp(const char *restrict words, wordexp_t *restrict we, int flags) {
+              if (!we) return -1;
+              we->we_wordc = 1;
+              we->we_wordv = malloc(2 * sizeof(char*));
+              we->we_wordv[0] = strdup(words);
+              we->we_wordv[1] = NULL;
+              we->we_offs = 0;
+              return 0;
+          }
+          void wordfree(wordexp_t *we) {
+              if (!we || !we->we_wordv) return;
+              for (size_t i = 0; i < we->we_wordc; i++) free(we->we_wordv[i]);
+              free(we->we_wordv);
+              we->we_wordv = NULL;
+              we->we_wordc = 0;
+          }
+          CEOF
+          cat > /tmp/wordexp/wordexp.h <<'HEOF'
+          #ifndef _WORDEXP_H
+          #define _WORDEXP_H
+          typedef struct { size_t we_wordc; char **we_wordv; size_t we_offs; } wordexp_t;
+          int wordexp(const char*, wordexp_t*, int);
+          void wordfree(wordexp_t*);
+          #define WRDE_NOCMD 1
+          #endif
+          HEOF
           cd /tmp/wordexp && $CC -shared -fPIC -O2 -I. -o libandroid-wordexp.so wordexp.c
           cp libandroid-wordexp.so $PREFIX/lib/ && cp wordexp.h $PREFIX/include/
 
