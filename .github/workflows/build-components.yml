@@ -331,18 +331,18 @@ jobs:
           $CC -shared -fPIC -O2 -Wall -o $PREFIX/lib/libredirect.so /tmp/rd/redirect.c -ldl
           chmod 755 $PREFIX/lib/libredirect.so
 
-      - name: Install xorgproto + xorg-util-macros (headers only)
+      - name: Install xorgproto + xorg-util-macros
         run: |
-          # xorgproto
           git clone --depth 1 https://gitlab.freedesktop.org/xorg/proto/xorgproto.git /tmp/xorgproto
           cd /tmp/xorgproto
           mkdir -p $PREFIX/include/X11 $PREFIX/include/X11/extensions $PREFIX/include/pixman $PREFIX/include/KD
-          cp X11/*.h $PREFIX/include/X11/ 2>/dev/null || true
-          cp X11/extensions/*.h $PREFIX/include/X11/extensions/ 2>/dev/null || true
-          cp pixman/*.h $PREFIX/include/pixman/ 2>/dev/null || true
-          cp KG/*.h $PREFIX/include/KD/ 2>/dev/null || true
-          # 生成 pkg-config 文件
-          mkdir -p $PREFIX/lib/pkgconfig
+          cp include/X11/*.h $PREFIX/include/X11/ 2>/dev/null || true
+          cp include/X11/extensions/*.h $PREFIX/include/X11/extensions/ 2>/dev/null || true
+          cp include/pixman/*.h $PREFIX/include/pixman/ 2>/dev/null || true
+          cp include/KD/*.h $PREFIX/include/KD/ 2>/dev/null || true
+          mkdir -p $PREFIX/lib/pkgconfig $PREFIX/share/aclocal
+          cp include/X11/*.h $PREFIX/include/X11/ 2>/dev/null || true
+          # pkg-config
           for pc in xproto kbproto renderproto fixesproto damageproto xextproto compositeproto randrproto recordproto inputproto scrnsaverproto videoproto dri2proto dri3proto presentproto resourceproto fontsproto bigreqsproto xcmsproto evieproto trapproto xcmiscproto; do
             echo "prefix=$PREFIX" > $PREFIX/lib/pkgconfig/$pc.pc
             echo "exec_prefix=\${prefix}" >> $PREFIX/lib/pkgconfig/$pc.pc
@@ -353,11 +353,11 @@ jobs:
             echo "Version: 2025.1" >> $PREFIX/lib/pkgconfig/$pc.pc
             echo "Cflags: -I\${includedir}" >> $PREFIX/lib/pkgconfig/$pc.pc
           done
-          # xorg-util-macros (xorg-macros.m4)
+          # xorg-util-macros
           wget -q https://xorg.freedesktop.org/releases/individual/util/util-macros-1.20.1.tar.xz
           tar xf util-macros-1.20.1.tar.xz && cd util-macros-1.20.1
           ./configure --prefix=$PREFIX && make install
-          # 确保 Xfuncproto.h 存在
+          # 验证
           ls -la $PREFIX/include/X11/Xfuncproto.h
 
       - name: Build libXau
