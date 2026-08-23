@@ -73,12 +73,12 @@ object AudioService {
         )
         if (preload != null) env["LD_PRELOAD"] = preload
 
-        val argv = listOf(paBin, "--start", "--exit-idle=-1",
+        val argv = listOf(paBin.absolutePath, "--start", "--exit-idle=-1",
             "-n", "-F", WinfexPaths.pulseConfigFile.absolutePath)
 
         val logFile = WinfexPaths.logFile("pulseaudio")
         val spec = ProcessExecutor.ExecSpec(
-            binary = paBin,
+            binary = paBin.absolutePath,
             argv = argv.drop(1),
             envp = env,
             workdir = usrDir,
