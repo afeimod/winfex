@@ -49,13 +49,6 @@ jobs:
           # MinGW for PE 编译（Wine 的 Windows DLL 部分）
           sudo apt-get install -y --no-install-recommends mingw-w64
 
-<<<<<<< HEAD
-      - name: Setup NDK
-        uses: nttld/setup-ndk@v1
-        id: ndk
-        with:
-          ndk-version: r29
-=======
       - name: Setup NDK (manual download)
         run: |
           wget -q "https://dl.google.com/android/repository/android-ndk-r29-linux.zip" -O /tmp/ndk.zip
@@ -76,7 +69,6 @@ jobs:
           done
           echo "/tmp/ndk" > /tmp/ndk-path.txt
           echo "NDK setup complete"
->>>>>>> f74ceb3 (修复构建)
 
       - name: Download RootFS
         uses: actions/download-artifact@v4
@@ -100,13 +92,6 @@ jobs:
 
       - name: Set NDK environment
         run: |
-<<<<<<< HEAD
-          NDK="${{ steps.ndk.outputs.ndk-path }}"
-          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
-          echo "NDK=$NDK" >> $GITHUB_ENV
-          # 找到正确的 clang
-          CLANG=$(find "$TC/bin/" -name "aarch64-linux-android*-clang" ! -name "*++*" | head -1)
-=======
           NDK="/tmp/ndk"
           TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
           CLANG=$(find "$TC/bin/" -name "aarch64-linux-android*-clang" ! -name "*++*" | head -1)
@@ -115,7 +100,6 @@ jobs:
             ls "$TC/bin/" | head -20
             exit 1
           fi
->>>>>>> f74ceb3 (修复构建)
           API=$(echo "$CLANG" | grep -oP 'android-\K\d+')
           echo "CC=$CLANG" >> $GITHUB_ENV
           echo "CXX=${CLANG}++" >> $GITHUB_ENV
@@ -125,10 +109,7 @@ jobs:
           echo "API=$API" >> $GITHUB_ENV
           echo "SYSROOT=$TC/sysroot" >> $GITHUB_ENV
           echo "Found clang: $CLANG (API $API)"
-<<<<<<< HEAD
-=======
           true
->>>>>>> f74ceb3 (修复构建)
 
       - name: Apply NDK patches
         run: |
