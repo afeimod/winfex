@@ -1,0 +1,152 @@
+name: Build FEX DLL
+
+# 构建 FEX-Emu 的 Windows DLL（libwow64fex.dll + libarm64ecfex.dll）
+# 这些 DLL 被 Wine 的 WoW64/ARM64EC 层加载，实现 x86 PE 的进程内翻译
+#
+# 不需要 RootFS，FEX DLL 用 MinGW 交叉编译为 Windows PE
+# 产出放到 system32/ 目录，DXWrapperInstaller 会复制到 Wine prefix
+
+on:
+  workflow_dispatch:
+    inputs:
+      fex_version:
+        description: 'FEX version (tag or commit)'
+        type: string
+        default: 'main'
+
+jobs:
+  build-fex-dll:
+    name: Build FEX DLL
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build clang llvm-dev libssl-dev \
+            python3 python3-pip mingw-w64
+          pip3 install --user mako jinja2 pyyaml
+
+      - name: Clone FEX-Emu
+        run: |
+          git clone --recurse-submodules --depth 1 https://github.com/FEX-Emu/FEX.git /tmp/fex-src
+          cd /tmp/fex-src
+          git log --oneline -1
+
+      # ============================================================
+      # 构建 32 位 WoW64 DLL (libwow64fex.dll)
+      # 用于翻译 i386 PE
+      # ============================================================
+      - name: Build libwow64fex.dll (i386 WoW64)
+        run: |
+          mkdir -p /tmp/fex-build-32 && cd /tmp/fex-build-32
+          # 使用 FEX 自带的 MinGW toolchain
+          cmake /tmp/fex-src \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_C_COMPILER=aarch64-w64-mingw32-clang \
+            -DCMAKE_CXX_COMPILER=aarch64-w64-mingw32-clang++ \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DENABLE_JIT=ON \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_THUNKS=OFF \
+            -DFEX_WOW64=ON \
+            -G Ninja
+
+          ninja wow64fex || {
+            echo "clang MinGW failed, trying gcc MinGW..."
+            cd /tmp && rm -rf /tmp/fex-build-32 && mkdir /tmp/fex-build-32 && cd /tmp/fex-build-32
+            cmake /tmp/fex-src \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_SYSTEM_NAME=Windows \
+              -DCMAKE_C_COMPILER=aarch64-w64-mingw32-gcc \
+              -DCMAKE_CXX_COMPILER=aarch64-w64-mingw32-g++ \
+              -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+              -DENABLE_JIT=ON \
+              -DBUILD_TESTS=OFF \
+              -DBUILD_THUNKS=OFF \
+              -DFEX_WOW64=ON \
+              -G Ninja
+            ninja wow64fex
+          }
+
+          ls -lh bin/libwow64fex.dll 2>/dev/null || ls -lh libwow64fex.dll 2>/dev/null || find . -name "libwow64fex.dll"
+
+      # ============================================================
+      # 构建 64 位 ARM64EC DLL (libarm64ecfex.dll)
+      # 用于翻译 x86_64 PE
+      # ============================================================
+      - name: Build libarm64ecfex.dll (x86_64 ARM64EC)
+        run: |
+          mkdir -p /tmp/fex-build-64 && cd /tmp/fex-build-64
+          cmake /tmp/fex-src \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_C_COMPILER=aarch64-w64-mingw32-clang \
+            -DCMAKE_CXX_COMPILER=aarch64-w64-mingw32-clang++ \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DENABLE_JIT=ON \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_THUNKS=OFF \
+            -DFEX_ARM64EC=ON \
+            -G Ninja
+
+          ninja arm64ecfex || {
+            echo "clang MinGW failed, trying gcc MinGW..."
+            cd /tmp && rm -rf /tmp/fex-build-64 && mkdir /tmp/fex-build-64 && cd /tmp/fex-build-64
+            cmake /tmp/fex-src \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_SYSTEM_NAME=Windows \
+              -DCMAKE_C_COMPILER=aarch64-w64-mingw32-gcc \
+              -DCMAKE_CXX_COMPILER=aarch64-w64-mingw32-g++ \
+              -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+              -DENABLE_JIT=ON \
+              -DBUILD_TESTS=OFF \
+              -DBUILD_THUNKS=OFF \
+              -DFEX_ARM64EC=ON \
+              -G Ninja
+            ninja arm64ecfex
+          }
+
+          ls -lh bin/libarm64ecfex.dll 2>/dev/null || ls -lh libarm64ecfex.dll 2>/dev/null || find . -name "libarm64ecfex.dll"
+
+      - name: Create FEX config
+        run: |
+          mkdir -p /tmp/fex-pkg/etc/fex-emu
+          cat > /tmp/fex-pkg/etc/fex-emu/DefaultConfig.json << 'EOF'
+          {
+            "Config": {
+              "TSOEnabled": true,
+              "Multiblock": true,
+              "VectorTSOEnabled": true,
+              "HalfBarrierTSOEnabled": true,
+              "X87ReducedPrecision": false,
+              "EnableAVX": false,
+              "SMCChecks": "none",
+              "ABIModeCheck": false
+            }
+          }
+          EOF
+
+      - name: Package FEX DLLs
+        run: |
+          mkdir -p /tmp/fex-pkg/system32
+          # 找到 DLL 文件并复制
+          find /tmp/fex-build-32 -name "libwow64fex.dll" -exec cp {} /tmp/fex-pkg/system32/ \; 2>/dev/null || true
+          find /tmp/fex-build-64 -name "libarm64ecfex.dll" -exec cp {} /tmp/fex-pkg/system32/ \; 2>/dev/null || true
+
+          echo "Contents:"
+          find /tmp/fex-pkg -type f -exec ls -lh {} \;
+
+          cd /tmp/fex-pkg
+          tar -cJf /tmp/fex-dll-aarch64.tar.xz .
+          ls -lh /tmp/fex-dll-aarch64.tar.xz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fex-dll-aarch64
+          path: /tmp/fex-dll-aarch64.tar.xz
+          retention-days: 30

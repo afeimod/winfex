@@ -1,0 +1,296 @@
+name: Build Wine (ARM64 WOW64)
+
+# 构建 ARM64 原生 Wine，支持 WOW64（通过 FEX/Box64 DLL 翻译 x86 PE）
+# 产出两种版本：
+#   1. wine-wow64-arm64     — 普通版 Wine（从 winehq.org 源码）
+#   2. proton-wow64-arm64   — Proton 版 Wine（从 ValveGitHub proton-wine）
+#
+# 两者都是 ARM64 原生 ELF，不需要 box64 翻译 Wine 自身。
+# x86 PE 翻译通过 HODLL=libwow64fex.dll 在进程内完成。
+#
+# 依赖 RootFS 已构建（需要 X11/PulseAudio/GStreamer/GnuTLS 等库）
+# 下载 RootFS artifact 后解压到 /tmp/bionic-prefix 作为 sysroot
+
+on:
+  workflow_dispatch:
+    inputs:
+      wine_version:
+        description: 'Wine version (wine-9.0 / wine-10.0 / proton-9.0)'
+        type: string
+        default: 'wine-9.0'
+      build_proton:
+        description: 'Also build Proton variant'
+        type: boolean
+        default: true
+
+env:
+  NDK_URL: 'https://dl.google.com/android/repository/android-ndk-r29-linux.zip'
+  ROOTFS_PREFIX: '/tmp/bionic-prefix'
+
+jobs:
+  build-wine:
+    name: Build Wine ${{ inputs.wine_version }} (ARM64 WOW64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            flex bison gcc-multilib g++-multilib \
+            libfreetype-dev libgl-dev libx11-dev libxext-dev \
+            libxrender-dev libxrandr-dev libxinerama-dev \
+            libxcomposite-dev libgstreamer1.0-dev \
+            libpulse-dev libgnutls28-dev libxcursor-dev \
+            libxi-dev libxxf86vm-dev libxfixes-dev \
+            pkg-config autoconf automake libtool gettext
+          # MinGW for PE 编译（Wine 的 Windows DLL 部分）
+          sudo apt-get install -y --no-install-recommends mingw-w64
+
+      - name: Setup NDK
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r29
+
+      - name: Download RootFS
+        uses: actions/download-artifact@v4
+        with:
+          name: rootfs-aarch64
+          path: /tmp/rootfs-download
+        continue-on-error: true
+
+      - name: Extract RootFS
+        run: |
+          if [ -f /tmp/rootfs-download/rootfs-aarch64.tar.xz ]; then
+            mkdir -p ${{ env.ROOTFS_PREFIX }}
+            cd ${{ env.ROOTFS_PREFIX }}
+            tar -xf /tmp/rootfs-download/rootfs-aarch64.tar.xz
+            echo "RootFS extracted"
+          else
+            echo "RootFS not found, creating minimal prefix"
+            mkdir -p ${{ env.ROOTFS_PREFIX }}/{lib,include,bin,share}
+          fi
+          ls ${{ env.ROOTFS_PREFIX }}/lib/*.so 2>/dev/null | head -10
+
+      - name: Set NDK environment
+        run: |
+          NDK="${{ steps.ndk.outputs.ndk-path }}"
+          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          echo "NDK=$NDK" >> $GITHUB_ENV
+          # 找到正确的 clang
+          CLANG=$(find "$TC/bin/" -name "aarch64-linux-android*-clang" ! -name "*++*" | head -1)
+          API=$(echo "$CLANG" | grep -oP 'android-\K\d+')
+          echo "CC=$CLANG" >> $GITHUB_ENV
+          echo "CXX=${CLANG}++" >> $GITHUB_ENV
+          echo "AR=$TC/bin/llvm-ar" >> $GITHUB_ENV
+          echo "RANLIB=$TC/bin/llvm-ranlib" >> $GITHUB_ENV
+          echo "STRIP=$TC/bin/llvm-strip" >> $GITHUB_ENV
+          echo "API=$API" >> $GITHUB_ENV
+          echo "SYSROOT=$TC/sysroot" >> $GITHUB_ENV
+          echo "Found clang: $CLANG (API $API)"
+
+      - name: Apply NDK patches
+        run: |
+          cd ${{ github.workspace }}/scripts
+          NDK_SYSROOT="${{ env.SYSROOT }}"
+          PREFIX="${{ env.ROOTFS_PREFIX }}"
+          for _patch in ndk_patches/r29/*.patch; do
+            cd "$NDK_SYSROOT"
+            if patch -p1 --dry-run <"$OLDPWD/$_patch" >/dev/null 2>&1; then
+              patch --no-backup-if-mismatch -N -p1 <<<"$(cat "$OLDPWD/$_patch" | sed "s|@TERMUX_PREFIX@|${PREFIX}|g" | sed "s|@TERMUX_PREFIX_CLASSICAL@|${PREFIX}|g" | sed "s|@ROOTFS_PREFIX@|${PREFIX}|g" | sed "s|__TERMUX__|__ANDROID__|g")" || true
+            fi
+            cd -
+          done
+
+      # ============================================================
+      # 构建 Wine 普通版 (wine-wow64-arm64)
+      # ============================================================
+      - name: Clone Wine ${{ inputs.wine_version }}
+        run: |
+          cd /tmp
+          # 判断是 wine-x.x 还是 proton-x.x
+          WINE_VER="${{ inputs.wine_version }}"
+          if [[ "$WINE_VER" == proton-* ]]; then
+            git clone --depth 1 --branch "$WINE_VER" https://github.com/ValveSoftware/wine.git /tmp/wine-src
+          else
+            git clone --depth 1 --branch "$WINE_VER" https://gitlab.winehq.org/wine/wine.git /tmp/wine-src
+          fi
+          ls /tmp/wine-src/configure*
+
+      - name: Build wine-tools (host)
+        run: |
+          # Wine 交叉编译需要先在 host 上构建 wine-tools
+          cd /tmp/wine-src
+          mkdir -p build-tools && cd build-tools
+          ../configure --enable-win64 --without-x
+          make -j$(nproc) __tooldeps__ nls/all
+          echo "wine-tools built"
+
+      - name: Configure Wine (ARM64 WOW64)
+        run: |
+          PREFIX="${{ env.ROOTFS_PREFIX }}"
+          export CC="${{ env.CC }}"
+          export CXX="${{ env.CXX }}"
+          export AR="${{ env.AR }}"
+          export RANLIB="${{ env.RANLIB }}"
+          export CFLAGS="-fPIC -O2 -D__ANDROID__ -Wno-error -I${PREFIX}/include"
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-L${PREFIX}/lib -landroid-shmem"
+          export PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig:${PREFIX}/share/pkgconfig"
+
+          cd /tmp/wine-src
+          mkdir -p build-arm64 && cd build-arm64
+
+          ../configure \
+            --host=aarch64-linux-android \
+            --prefix=${PREFIX}/opt/wine-wow64-arm64 \
+            --enable-archs=arm64ec,aarch64,i386,x86_64 \
+            --with-wine-tools=/tmp/wine-src/build-tools \
+            --without-oss \
+            --disable-winemenubuilder \
+            --disable-win16 \
+            --disable-tests \
+            --with-x \
+            --x-libraries=${PREFIX}/lib \
+            --x-includes=${PREFIX}/include \
+            --with-pulse \
+            --with-gstreamer \
+            --with-opengl \
+            --with-gnutls \
+            --with-mingw \
+            --enable-nls \
+            --without-xshm \
+            --without-xxf86vm \
+            --without-osmesa \
+            --without-usb \
+            --without-sdl \
+            --without-wayland \
+            --without-cups \
+            --without-netapi \
+            --without-pcap \
+            --without-gphoto \
+            --without-v4l2 \
+            --without-pcsclite \
+            --without-opencl \
+            --without-dbus \
+            --without-sane \
+            --without-udev
+
+      - name: Build Wine
+        run: |
+          cd /tmp/wine-src/build-arm64
+          make -j$(nproc)
+
+      - name: Install Wine
+        run: |
+          cd /tmp/wine-src/build-arm64
+          make install
+
+      - name: Package Wine (wow64-arm64)
+        run: |
+          cd ${{ env.ROOTFS_PREFIX }}/opt/wine-wow64-arm64
+          tar -cJf /tmp/wine-wow64-arm64.tar.xz .
+          ls -lh /tmp/wine-wow64-arm64.tar.xz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wine-wow64-arm64
+          path: /tmp/wine-wow64-arm64.tar.xz
+          retention-days: 30
+
+      # ============================================================
+      # 构建 Proton 版 (proton-wow64-arm64)
+      # ============================================================
+      - name: Clone Proton Wine
+        if: ${{ inputs.build_proton }}
+        run: |
+          cd /tmp
+          git clone --depth 1 --branch proton-9.0 https://github.com/ValveSoftware/wine.git /tmp/proton-wine-src
+
+      - name: Build Proton wine-tools (host)
+        if: ${{ inputs.build_proton }}
+        run: |
+          cd /tmp/proton-wine-src
+          mkdir -p build-tools && cd build-tools
+          ../configure --enable-win64 --without-x
+          make -j$(nproc) __tooldeps__ nls/all
+
+      - name: Configure Proton Wine (ARM64 WOW64)
+        if: ${{ inputs.build_proton }}
+        run: |
+          PREFIX="${{ env.ROOTFS_PREFIX }}"
+          export CC="${{ env.CC }}"
+          export CXX="${{ env.CXX }}"
+          export AR="${{ env.AR }}"
+          export RANLIB="${{ env.RANLIB }}"
+          export CFLAGS="-fPIC -O2 -D__ANDROID__ -Wno-error -I${PREFIX}/include"
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-L${PREFIX}/lib -landroid-shmem"
+          export PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig:${PREFIX}/share/pkgconfig"
+
+          cd /tmp/proton-wine-src
+          mkdir -p build-arm64 && cd build-arm64
+
+          ../configure \
+            --host=aarch64-linux-android \
+            --prefix=${PREFIX}/opt/proton-wow64-arm64 \
+            --enable-archs=arm64ec,aarch64,i386,x86_64 \
+            --with-wine-tools=/tmp/proton-wine-src/build-tools \
+            --without-oss \
+            --disable-winemenubuilder \
+            --disable-win16 \
+            --disable-tests \
+            --with-x \
+            --x-libraries=${PREFIX}/lib \
+            --x-includes=${PREFIX}/include \
+            --with-pulse \
+            --with-gstreamer \
+            --with-opengl \
+            --with-gnutls \
+            --with-mingw \
+            --enable-nls \
+            --without-xshm \
+            --without-xxf86vm \
+            --without-osmesa \
+            --without-usb \
+            --without-sdl \
+            --without-wayland \
+            --without-cups \
+            --without-netapi \
+            --without-pcap \
+            --without-gphoto \
+            --without-v4l2 \
+            --without-pcsclite \
+            --without-opencl \
+            --without-dbus \
+            --without-sane \
+            --without-udev
+
+      - name: Build Proton Wine
+        if: ${{ inputs.build_proton }}
+        run: |
+          cd /tmp/proton-wine-src/build-arm64
+          make -j$(nproc)
+
+      - name: Install Proton Wine
+        if: ${{ inputs.build_proton }}
+        run: |
+          cd /tmp/proton-wine-src/build-arm64
+          make install
+
+      - name: Package Proton Wine
+        if: ${{ inputs.build_proton }}
+        run: |
+          cd ${{ env.ROOTFS_PREFIX }}/opt/proton-wow64-arm64
+          tar -cJf /tmp/proton-wow64-arm64.tar.xz .
+          ls -lh /tmp/proton-wow64-arm64.tar.xz
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ inputs.build_proton }}
+        with:
+          name: proton-wow64-arm64
+          path: /tmp/proton-wow64-arm64.tar.xz
+          retention-days: 30

@@ -1,0 +1,72 @@
+name: Build Box64
+
+# 构建 Box64 翻译器（辅助翻译器，ARM64EC + FEX 不可用时回退使用）
+# Box64 翻译整个 x86_64 Wine 进程
+#
+# 不需要 RootFS，直接用 NDK 编译
+
+on:
+  workflow_dispatch:
+    inputs:
+      box64_version:
+        description: 'Box64 version (tag or branch)'
+        type: string
+        default: 'main'
+
+jobs:
+  build-box64:
+    name: Build Box64
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup NDK
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r29
+
+      - name: Clone Box64
+        run: |
+          git clone --depth 1 --branch ${{ inputs.box64_version }} https://github.com/ptitSeb/box64.git /tmp/box64-src || \
+          git clone --depth 1 https://github.com/ptitSeb/box64.git /tmp/box64-src
+
+      - name: Build Box64
+        run: |
+          NDK="${{ steps.ndk.outputs.ndk-path }}"
+          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          CLANG=$(find "$TC/bin/" -name "aarch64-linux-android*-clang" ! -name "*++*" | head -1)
+          export CC="$CLANG"
+          export CXX="${CLANG}++"
+
+          mkdir -p /tmp/box64-build && cd /tmp/box64-build
+          cmake /tmp/box64-src \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DANDROID=ON \
+            -DBAD_SIGNAL=ON \
+            -DARM_DYNAREC=ON \
+            -DNO_CONF_INSTALL=ON \
+            -DNO_LIB_INSTALL=ON \
+            -DCMAKE_C_COMPILER=$CC \
+            -DCMAKE_CXX_COMPILER=$CXX \
+            -G Ninja
+
+          ninja box64
+
+          mkdir -p /tmp/box64-pkg/local/bin
+          cp box64 /tmp/box64-pkg/local/bin/
+          chmod 755 /tmp/box64-pkg/local/bin/box64
+          ls -lh /tmp/box64-pkg/local/bin/box64
+
+      - name: Package Box64
+        run: |
+          cd /tmp/box64-pkg
+          tar -cJf /tmp/box64-aarch64.tar.xz .
+          ls -lh /tmp/box64-aarch64.tar.xz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: box64-aarch64
+          path: /tmp/box64-aarch64.tar.xz
+          retention-days: 30
