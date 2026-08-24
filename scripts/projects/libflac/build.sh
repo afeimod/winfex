@@ -11,6 +11,7 @@ args="
   -DFLAC_BUILD_TESTS=OFF
   -DFLAC_BUILD_DOCS=OFF
   -DINSTALL_MANPAGES=OFF
+  -DWITH_ICONV=OFF
   -DOGG_INCLUDE_DIR=${prefix}/include
   -DOGG_LIBRARY=${prefix}/lib/libogg.so
   -DCMAKE_FIND_ROOT_PATH=${prefix}
@@ -18,6 +19,6 @@ args="
 deps="libogg"
 
 pre_setup() {
-  # Ensure pkg-config can find ogg
   export PKG_CONFIG_PATH="${prefix}/lib/pkgconfig:${prefix}/share/pkgconfig"
+  LDFLAGS+=" -liconv"
 }
