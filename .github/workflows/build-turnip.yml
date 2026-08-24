@@ -82,15 +82,24 @@ jobs:
           path: /tmp/rootfs-download
         continue-on-error: true
 
-      - name: Extract RootFS
+      - name: Extract RootFS (optional)
         run: |
           if [ -f /tmp/rootfs-download/rootfs-aarch64.tar.xz ]; then
             mkdir -p ${{ env.ROOTFS_PREFIX }}
             cd ${{ env.ROOTFS_PREFIX }}
             tar -xf /tmp/rootfs-download/rootfs-aarch64.tar.xz
+            echo "RootFS extracted. Total .so files: $(find ${{ env.ROOTFS_PREFIX }}/lib -name '*.so' 2>/dev/null | wc -l)"
           else
+            echo "WARNING: rootfs-aarch64 artifact not found."
+            echo "Turnip can build without RootFS, but libdrm/zstd from RootFS will be missing."
+            echo "To get full RootFS, run the 'Build Components' workflow first."
             mkdir -p ${{ env.ROOTFS_PREFIX }}/{lib,include,share}
           fi
+          echo "---"
+          echo "NDK sysroot contents (checking for openssl/BoringSSL headers):"
+          SYSROOT="/tmp/ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          ls "$SYSROOT/usr/include/openssl/evp.h" 2>/dev/null && echo "  BoringSSL evp.h: OK" || echo "  BoringSSL evp.h: MISSING"
+          ls "$SYSROOT/usr/include/openssl/" 2>/dev/null | head -10
 
       - name: Set NDK environment
         run: |
@@ -198,29 +207,29 @@ jobs:
       - name: Build Turnip (vulkan-freedreno)
         run: |
           PREFIX="${{ env.ROOTFS_PREFIX }}"
+          SYSROOT="${{ env.SYSROOT }}"
           export PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig:${PREFIX}/share/pkgconfig"
-          export CFLAGS="-fPIC -O2 -D__ANDROID__ -I${PREFIX}/include"
+          # 包含 NDK sysroot 的 include 路径，里面有 BoringSSL 的 openssl/* 头文件
+          export CFLAGS="-fPIC -O2 -D__ANDROID__ -I${PREFIX}/include -I${SYSROOT}/usr/include"
           export CXXFLAGS="$CFLAGS"
-          export LDFLAGS="-L${PREFIX}/lib"
+          export LDFLAGS="-L${PREFIX}/lib -L${SYSROOT}/usr/lib/aarch64-linux-android"
 
           cd /tmp/mesa-src
           # 删除可能存在的 Termux-patched wraps，让 meson 使用上游 wrapdb
-          # 但保留必要的 wrap（如 libarchive 用于 shader cache）
-          # 如果 libarchive.wrap 指向 Termux fork，替换为上游 URL
           if [ -f subprojects/libarchive.wrap ]; then
             echo "=== Original libarchive.wrap ==="
             cat subprojects/libarchive.wrap
-            # 检查是否是 Termux fork（包含 termux 或 tukaani.org 的源 URL）
-            if grep -qi 'termux' subprojects/libarchive.wrap 2>/dev/null; then
-              echo "WARNING: libarchive.wrap appears to be Termux-patched. Leaving it as-is."
-              echo "Relying on android_lf.h stub to fix compilation."
-            fi
           fi
           # 如果已存在 Termux-patched libarchive 源码，删除让 meson 重新拉取
           rm -rf subprojects/libarchive-3.*/
-          # 如果有已下载的 termux-patched 源码包，也删除
           rm -rf subprojects/packagecache/libarchive-*
 
+          # 关键修复：禁用 libarchive 的所有 crypto 后端
+          # 因为 RootFS 中没有 libssl/libcrypto，而 NDK sysroot 中的 BoringSSL
+          # 头文件虽然存在但库名不同（libcrypto.so 是 Android 系统库）。
+          # Mesa 的 Turnip 不需要 libarchive 的加密功能（shader-cache 已禁用），
+          # 所以禁用 crypto 后端是安全的。
+          # 同时禁用其他可能缺失的依赖（expat/iconv/pcreposix 等可选功能）。
           meson setup /tmp/mesa-build \
             --prefix=${PREFIX} \
             --cross-file /tmp/cross-aarch64-android.ini \
@@ -233,7 +242,18 @@ jobs:
             -Dopengl=false \
             -Degl=disabled \
             -Dzstd=enabled \
-            -Dshader-cache=disabled
+            -Dshader-cache=disabled \
+            -Dlibarchive:openssl=disabled \
+            -Dlibarchive:mbedtls=disabled \
+            -Dlibarchive:nettle=disabled \
+            -Dlibarchive:cng=disabled \
+            -Dlibarchive:libb2=disabled \
+            -Dlibarchive:pcreposix=disabled \
+            -Dlibarchive:expat=disabled \
+            -Dlibarchive:iconv=disabled \
+            -Dlibarchive:lz4=disabled \
+            -Dlibarchive:lzma=disabled \
+            -Dlibarchive:bzip2=disabled
 
           meson compile -C /tmp/mesa-build
           meson install -C /tmp/mesa-build

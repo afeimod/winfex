@@ -99,20 +99,30 @@ jobs:
         with:
           name: rootfs-aarch64
           path: /tmp/rootfs-download
-        continue-on-error: true
 
-      - name: Extract RootFS
+      - name: Extract and verify RootFS
         run: |
-          if [ -f /tmp/rootfs-download/rootfs-aarch64.tar.xz ]; then
-            mkdir -p ${{ env.ROOTFS_PREFIX }}
-            cd ${{ env.ROOTFS_PREFIX }}
-            tar -xf /tmp/rootfs-download/rootfs-aarch64.tar.xz
-            echo "RootFS extracted"
-          else
-            echo "RootFS not found, creating minimal prefix"
-            mkdir -p ${{ env.ROOTFS_PREFIX }}/{lib,include,bin,share}
+          if [ ! -f /tmp/rootfs-download/rootfs-aarch64.tar.xz ]; then
+            echo "============================================"
+            echo "ERROR: rootfs-aarch64 artifact not found."
+            echo "Please run the 'Build Components' workflow first"
+            echo "to produce the RootFS artifact, then re-run this workflow."
+            echo "============================================"
+            exit 1
           fi
-          ls ${{ env.ROOTFS_PREFIX }}/lib/*.so 2>/dev/null | head -10
+          mkdir -p ${{ env.ROOTFS_PREFIX }}
+          cd ${{ env.ROOTFS_PREFIX }}
+          tar -xf /tmp/rootfs-download/rootfs-aarch64.tar.xz
+          echo "RootFS extracted. Contents:"
+          ls ${{ env.ROOTFS_PREFIX }}/lib/*.so 2>/dev/null | head -20
+          echo "---"
+          echo "Total .so files: $(find ${{ env.ROOTFS_PREFIX }}/lib -name '*.so' 2>/dev/null | wc -l)"
+          echo "---"
+          echo "Key headers:"
+          ls ${{ env.ROOTFS_PREFIX }}/include/X11/X.h 2>/dev/null && echo "  X11: OK" || echo "  X11: MISSING"
+          ls ${{ env.ROOTFS_PREFIX }}/include/pulse/pulseaudio.h 2>/dev/null && echo "  PulseAudio: OK" || echo "  PulseAudio: MISSING"
+          ls ${{ env.ROOTFS_PREFIX }}/include/gstreamer-1.0/gst/gst.h 2>/dev/null && echo "  GStreamer: OK" || echo "  GStreamer: MISSING"
+          ls ${{ env.ROOTFS_PREFIX }}/include/gnutls/gnutls.h 2>/dev/null && echo "  GnuTLS: OK" || echo "  GnuTLS: MISSING"
 
       - name: Set NDK environment
         run: |
