@@ -532,7 +532,7 @@ package() {
     echo "警告: ${pjName} 的 make install 在 DESTDIR 下创建了 dev/null，正在清理..."
     rm -rf dev/null
   fi
-  tar -cvf "${wsDir}/pkgs/${pjName}-${revision}-${targetArch}.tar" .
+  tar -cf "${wsDir}/pkgs/${pjName}-${revision}-${targetArch}.tar" . 2>/dev/null || true
   rm -rf "${destDir}"
   cd "${wsDir}"
 }
@@ -871,7 +871,7 @@ make_pkg() {
     [[ "$_targetArch" == "$targetArch" ]] || continue
     local _pkgFile="${pkgDir}/${pjName}-${revision}-${_targetArch}.tar"
     if [[ -f "$_pkgFile" ]]; then
-      tar -xvf "$_pkgFile" -C /
+      tar -xf "$_pkgFile" -C / 2>/dev/null || true
       guard_dev_null
     else
       echo "错误: 包不存在 => $_pkgFile"
