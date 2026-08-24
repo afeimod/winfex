@@ -13,6 +13,10 @@ on:
         description: 'Mesa version (mesa-24.1.0 / mesa-25.1.4)'
         type: string
         default: 'mesa-25.1.4'
+      rootfs_release_tag:
+        description: 'Release tag for RootFS download (e.g. rootfs-latest)'
+        type: string
+        default: 'rootfs-latest'
 
 env:
   NDK_URL: 'https://dl.google.com/android/repository/android-ndk-r29-linux.zip'
@@ -23,6 +27,8 @@ jobs:
     name: Build Turnip (${{ inputs.mesa_version }})
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -75,7 +81,40 @@ jobs:
           ln -sf "$TC/bin/llvm-nm" "$TC/bin/aarch64-linux-android-nm"
           echo "NDK setup complete"
 
-      - name: Download RootFS
+      # ============================================================
+      # 下载 RootFS —— 优先从 GitHub Release 下载
+      # ============================================================
+      - name: Download RootFS from GitHub Release
+        id: download_release
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ inputs.rootfs_release_tag }}"
+          REPO="${{ github.repository }}"
+          echo "Trying to download RootFS from release '$TAG' on $REPO"
+          mkdir -p /tmp/rootfs-download
+          if gh release download "$TAG" --repo "$REPO" \
+              --pattern "rootfs-aarch64.tar.xz" \
+              --output /tmp/rootfs-download/rootfs-aarch64.tar.xz 2>/dev/null; then
+            echo "Downloaded from release."
+            ls -lh /tmp/rootfs-download/rootfs-aarch64.tar.xz
+            gh release download "$TAG" --repo "$REPO" \
+              --pattern "rootfs-aarch64.tar.xz.sha256" \
+              --output /tmp/rootfs-download/rootfs-aarch64.tar.xz.sha256 2>/dev/null || true
+            if [ -f /tmp/rootfs-download/rootfs-aarch64.tar.xz.sha256 ]; then
+              echo "Verifying SHA256..."
+              cd /tmp/rootfs-download
+              sha256sum -c rootfs-aarch64.tar.xz.sha256
+            fi
+            echo "rootfs_source=release" >> $GITHUB_ENV
+          else
+            echo "Release '$TAG' not found or download failed."
+            echo "Will try artifact fallback in next step."
+          fi
+
+      - name: Fallback - Download RootFS from workflow artifact
+        if: ${{ steps.download_release.outcome != 'success' }}
         uses: actions/download-artifact@v4
         with:
           name: rootfs-aarch64
@@ -88,11 +127,19 @@ jobs:
             mkdir -p ${{ env.ROOTFS_PREFIX }}
             cd ${{ env.ROOTFS_PREFIX }}
             tar -xf /tmp/rootfs-download/rootfs-aarch64.tar.xz
-            echo "RootFS extracted. Total .so files: $(find ${{ env.ROOTFS_PREFIX }}/lib -name '*.so' 2>/dev/null | wc -l)"
+            echo "RootFS extracted. Source: ${{ env.rootfs_source || 'artifact-fallback' }}"
+            echo "Total .so files: $(find ${{ env.ROOTFS_PREFIX }}/lib -name '*.so' 2>/dev/null | wc -l)"
           else
-            echo "WARNING: rootfs-aarch64 artifact not found."
-            echo "Turnip can build without RootFS, but libdrm/zstd from RootFS will be missing."
-            echo "To get full RootFS, run the 'Build Components' workflow first."
+            echo ""
+            echo "=========================================================="
+            echo "  WARNING: RootFS not found in release or artifact"
+            echo "=========================================================="
+            echo ""
+            echo "Turnip can build without RootFS, but some features will be missing."
+            echo "TO FIX (recommended):"
+            echo "  1. Run 'Build Components' workflow with release_tag='rootfs-latest'"
+            echo "  2. Re-run THIS 'Build Turnip' workflow"
+            echo ""
             mkdir -p ${{ env.ROOTFS_PREFIX }}/{lib,include,share}
           fi
           echo "---"
@@ -209,27 +256,21 @@ jobs:
           PREFIX="${{ env.ROOTFS_PREFIX }}"
           SYSROOT="${{ env.SYSROOT }}"
           export PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig:${PREFIX}/share/pkgconfig"
-          # 包含 NDK sysroot 的 include 路径，里面有 BoringSSL 的 openssl/* 头文件
+          # 包含 NDK sysroot 的 include 路径
           export CFLAGS="-fPIC -O2 -D__ANDROID__ -I${PREFIX}/include -I${SYSROOT}/usr/include"
           export CXXFLAGS="$CFLAGS"
           export LDFLAGS="-L${PREFIX}/lib -L${SYSROOT}/usr/lib/aarch64-linux-android"
 
           cd /tmp/mesa-src
-          # 删除可能存在的 Termux-patched wraps，让 meson 使用上游 wrapdb
-          if [ -f subprojects/libarchive.wrap ]; then
-            echo "=== Original libarchive.wrap ==="
-            cat subprojects/libarchive.wrap
-          fi
-          # 如果已存在 Termux-patched libarchive 源码，删除让 meson 重新拉取
+          # 删除可能存在的 Termux-patched libarchive 源码，让 meson 重新拉取
           rm -rf subprojects/libarchive-3.*/
           rm -rf subprojects/packagecache/libarchive-*
 
-          # 关键修复：禁用 libarchive 的所有 crypto 后端
-          # 因为 RootFS 中没有 libssl/libcrypto，而 NDK sysroot 中的 BoringSSL
-          # 头文件虽然存在但库名不同（libcrypto.so 是 Android 系统库）。
-          # Mesa 的 Turnip 不需要 libarchive 的加密功能（shader-cache 已禁用），
-          # 所以禁用 crypto 后端是安全的。
-          # 同时禁用其他可能缺失的依赖（expat/iconv/pcreposix 等可选功能）。
+          # 关键修复：禁用 libarchive 所有可选依赖
+          # RootFS 中没有 libssl/libcrypto/libxml2 等，禁用避免编译失败
+          # Mesa Turnip 不需要 libarchive 的这些功能（shader-cache 已禁用）
+          # libarchive 3.7.2 valid options: zlib, bz2lib, libb2, iconv, lz4, zstd,
+          # lzma, lzo2, openssl, xml2, expat, regex, xattr, acl
           meson setup /tmp/mesa-build \
             --prefix=${PREFIX} \
             --cross-file /tmp/cross-aarch64-android.ini \
@@ -241,19 +282,22 @@ jobs:
             -Dllvm=disabled \
             -Dopengl=false \
             -Degl=disabled \
-            -Dzstd=enabled \
+            -Dzstd=disabled \
             -Dshader-cache=disabled \
             -Dlibarchive:openssl=disabled \
-            -Dlibarchive:mbedtls=disabled \
-            -Dlibarchive:nettle=disabled \
-            -Dlibarchive:cng=disabled \
-            -Dlibarchive:libb2=disabled \
-            -Dlibarchive:pcreposix=disabled \
+            -Dlibarchive:xml2=disabled \
             -Dlibarchive:expat=disabled \
             -Dlibarchive:iconv=disabled \
+            -Dlibarchive:libb2=disabled \
+            -Dlibarchive:regex=disabled \
             -Dlibarchive:lz4=disabled \
+            -Dlibarchive:zstd=disabled \
             -Dlibarchive:lzma=disabled \
-            -Dlibarchive:bzip2=disabled
+            -Dlibarchive:lzo2=disabled \
+            -Dlibarchive:bz2lib=disabled \
+            -Dlibarchive:zlib=disabled \
+            -Dlibarchive:xattr=disabled \
+            -Dlibarchive:acl=disabled
 
           meson compile -C /tmp/mesa-build
           meson install -C /tmp/mesa-build

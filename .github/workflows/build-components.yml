@@ -2,6 +2,10 @@ name: Build Components
 
 # 直接使用 android-bionic-rootfs 项目的构建脚本
 # 构建 51 个包的完整 RootFS（含 PulseAudio / Vulkan / GStreamer / ALSA 等）
+#
+# 关键改进：构建完成后把 rootfs-aarch64.tar.xz 发布到 GitHub Release
+# 这样 Build Wine / Build Turnip 等独立 workflow 可以用 wget 直接下载，
+# 彻底绕开 actions/download-artifact@v4 跨 run 下载的限制。
 
 on:
   workflow_dispatch:
@@ -10,6 +14,11 @@ on:
         description: 'Target architecture (aarch64)'
         type: string
         default: 'aarch64'
+      release_tag:
+        description: 'Release tag to publish RootFS (e.g. rootfs-v0.5). Leave empty to skip publishing.'
+        type: string
+        default: 'rootfs-latest'
+        required: false
 
 env:
   NDK_URL: 'https://dl.google.com/android/repository/android-ndk-r29-linux.zip'
@@ -19,6 +28,8 @@ jobs:
     name: Build Complete RootFS
     runs-on: ubuntu-latest
     timeout-minutes: 240
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -125,28 +136,33 @@ jobs:
     name: Build Box64
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - name: Install NDK
         run: |
+          set -e
           wget -q "https://dl.google.com/android/repository/android-ndk-r29-linux.zip" -O /tmp/ndk.zip
-          cd /tmp && unzip -q ndk.zip -d ndk-tmp || true
-          NDK_EXTRACTED=$(ls -d /tmp/ndk-tmp/android-ndk-*)
+          rm -rf /tmp/ndk-tmp /tmp/ndk
+          mkdir -p /tmp/ndk-tmp
+          unzip -q /tmp/ndk.zip -d /tmp/ndk-tmp
+          NDK_EXTRACTED=$(ls -d /tmp/ndk-tmp/android-ndk-* | head -1)
           mkdir -p /tmp/ndk
           cp -a "$NDK_EXTRACTED/." /tmp/ndk/
       - name: Build Box64
         run: |
           NDK=/tmp/ndk
           TC=$NDK/toolchains/llvm/prebuilt/linux-x86_64
-          CLANG=$(find "$TC/bin/" -name "aarch64-linux-android*-clang" | head -1)
+          CLANG=$(find "$TC/bin/" -name "aarch64-linux-android*-clang" ! -name "*++*" | head -1)
           export CC="$CLANG"
           export CXX="${CLANG}++"
           git clone --depth 1 https://github.com/ptitSeb/box64.git /tmp/box64-src
           mkdir -p /tmp/box64-build && cd /tmp/box64-build
           cmake /tmp/box64-src -DCMAKE_BUILD_TYPE=Release -DANDROID=1 -DBAD_SIGNAL=1 \
             -DARM_DYNAREC=ON -DNO_CONF_INSTALL=ON -DNO_LIB_INSTALL=ON \
-            -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX
-          make -j$(nproc) box64
+            -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX -G Ninja
+          ninja box64
           mkdir -p /tmp/box64-pkg/local/bin
           cp box64 /tmp/box64-pkg/local/bin/
           chmod 755 /tmp/box64-pkg/local/bin/box64
@@ -157,11 +173,118 @@ jobs:
           name: box64-aarch64
           path: /tmp/box64-aarch64.tar.xz
 
+  # ============================================================
+  # 发布 RootFS 到 GitHub Release —— 让其他 workflow 能直接 wget 下载
+  # ============================================================
+  publish-release:
+    name: Publish RootFS to GitHub Release
+    needs: build-rootfs
+    if: ${{ github.event.inputs.release_tag != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download RootFS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rootfs-aarch64
+          path: /tmp/rootfs-download
+
+      - name: Verify RootFS file
+        run: |
+          ls -lh /tmp/rootfs-download/
+          if [ ! -f /tmp/rootfs-download/rootfs-aarch64.tar.xz ]; then
+            echo "ERROR: rootfs-aarch64.tar.xz not found in downloaded artifact"
+            exit 1
+          fi
+          # 计算 sha256 供下载方校验
+          cd /tmp/rootfs-download
+          sha256sum rootfs-aarch64.tar.xz | tee rootfs-aarch64.tar.xz.sha256
+          # 生成 manifest
+          cat > MANIFEST.txt <<EOF
+          # RootFS manifest
+          # Generated: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          # Source: ${{ github.repository }} @ commit ${{ github.sha }}
+
+          file: rootfs-aarch64.tar.xz
+          size: $(stat -c %s rootfs-aarch64.tar.xz) bytes
+          sha256: $(sha256sum rootfs-aarch64.tar.xz | awk '{print $1}')
+          so_count: $(tar -tJf rootfs-aarch64.tar.xz | grep -c '\.so$')
+          EOF
+          # 去除前导空格（YAML heredoc 缩进）
+          sed -i 's|^          ||' MANIFEST.txt
+          cat MANIFEST.txt
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.inputs.release_tag }}"
+          REPO="${{ github.repository }}"
+          SHA="${{ github.sha }}"
+          echo "Publishing rootfs-aarch64.tar.xz to release '$TAG' on $REPO"
+
+          # 生成 release notes 到文件（用 python 避免 shell 引号转义问题）
+          python3 -c "
+          import sys
+          repo, tag, sha = sys.argv[1], sys.argv[2], sys.argv[3]
+          notes = f'''Auto-generated RootFS for aarch64.
+
+          Built from commit {sha}.
+
+          ## 文件说明
+
+          - \`rootfs-aarch64.tar.xz\` — 完整 RootFS（X11/PulseAudio/GStreamer/GnuTLS/ALSA 等）
+          - \`rootfs-aarch64.tar.xz.sha256\` — SHA256 校验和
+          - \`MANIFEST.txt\` — 构建信息清单
+
+          ## 使用方法
+
+          其他 workflow 可用以下命令下载使用：
+
+          \`\`\`bash
+          wget -q https://github.com/{repo}/releases/download/{tag}/rootfs-aarch64.tar.xz
+          wget -q https://github.com/{repo}/releases/download/{tag}/rootfs-aarch64.tar.xz.sha256
+          \`\`\`
+          '''
+          # 去除每行前导 10 空格（YAML heredoc 缩进）
+          lines = [line[10:] if line.startswith(' ' * 10) else line for line in notes.splitlines()]
+          with open('/tmp/release_notes.md', 'w') as f:
+              f.write('\n'.join(lines))
+          " "$REPO" "$TAG" "$SHA"
+          echo "=== Release notes ==="
+          cat /tmp/release_notes.md
+
+          # 检查 release 是否已存在
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Release '$TAG' already exists — updating."
+            gh release upload "$TAG" --repo "$REPO" --clobber \
+              /tmp/rootfs-download/rootfs-aarch64.tar.xz \
+              /tmp/rootfs-download/rootfs-aarch64.tar.xz.sha256 \
+              /tmp/rootfs-download/MANIFEST.txt
+          else
+            echo "Creating new release '$TAG'."
+            gh release create "$TAG" --repo "$REPO" \
+              --title "RootFS $TAG" \
+              --notes-file /tmp/release_notes.md \
+              /tmp/rootfs-download/rootfs-aarch64.tar.xz \
+              /tmp/rootfs-download/rootfs-aarch64.tar.xz.sha256 \
+              /tmp/rootfs-download/MANIFEST.txt
+          fi
+
+          echo "---"
+          echo "Release assets:"
+          gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[] | "\(.name)\t\(.size) bytes"'
+
   package-all:
     name: Package All Components
     needs: [build-rootfs, build-box64]
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/download-artifact@v4
         with:

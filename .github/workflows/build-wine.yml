@@ -5,11 +5,10 @@ name: Build Wine (ARM64 WOW64)
 #   1. wine-wow64-arm64     — 普通版 Wine（从 winehq.org 源码）
 #   2. proton-wow64-arm64   — Proton 版 Wine（从 ValveGitHub proton-wine）
 #
-# 两者都是 ARM64 原生 ELF，不需要 box64 翻译 Wine 自身。
-# x86 PE 翻译通过 HODLL=libwow64fex.dll 在进程内完成。
-#
-# 依赖 RootFS 已构建（需要 X11/PulseAudio/GStreamer/GnuTLS 等库）
-# 下载 RootFS artifact 后解压到 /tmp/bionic-prefix 作为 sysroot
+# RootFS 获取策略（按优先级）：
+#   1. 从 GitHub Release 下载（推荐 —— 跨 run 可用，稳定可靠）
+#   2. 从当前 workflow run 的 artifact 下载（fallback）
+#   3. 失败：提示用户先运行 Build Components workflow
 
 on:
   workflow_dispatch:
@@ -22,6 +21,10 @@ on:
         description: 'Also build Proton variant'
         type: boolean
         default: true
+      rootfs_release_tag:
+        description: 'Release tag for RootFS download (e.g. rootfs-latest)'
+        type: string
+        default: 'rootfs-latest'
 
 env:
   NDK_URL: 'https://dl.google.com/android/repository/android-ndk-r29-linux.zip'
@@ -32,6 +35,8 @@ jobs:
     name: Build Wine ${{ inputs.wine_version }} (ARM64 WOW64)
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -94,35 +99,85 @@ jobs:
           echo "API_NUM=$API_NUM" >> $GITHUB_ENV
           echo "NDK setup complete with API $API_NUM"
 
-      - name: Download RootFS
+      # ============================================================
+      # 下载 RootFS —— 优先从 GitHub Release 下载
+      # ============================================================
+      - name: Download RootFS from GitHub Release
+        id: download_release
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ inputs.rootfs_release_tag }}"
+          REPO="${{ github.repository }}"
+          echo "Trying to download RootFS from release '$TAG' on $REPO"
+          mkdir -p /tmp/rootfs-download
+          if gh release download "$TAG" --repo "$REPO" \
+              --pattern "rootfs-aarch64.tar.xz" \
+              --output /tmp/rootfs-download/rootfs-aarch64.tar.xz 2>/dev/null; then
+            echo "Downloaded from release."
+            ls -lh /tmp/rootfs-download/rootfs-aarch64.tar.xz
+            # 下载 sha256（如果存在）
+            gh release download "$TAG" --repo "$REPO" \
+              --pattern "rootfs-aarch64.tar.xz.sha256" \
+              --output /tmp/rootfs-download/rootfs-aarch64.tar.xz.sha256 2>/dev/null || true
+            if [ -f /tmp/rootfs-download/rootfs-aarch64.tar.xz.sha256 ]; then
+              echo "Verifying SHA256..."
+              cd /tmp/rootfs-download
+              sha256sum -c rootfs-aarch64.tar.xz.sha256
+            fi
+            echo "rootfs_source=release" >> $GITHUB_ENV
+          else
+            echo "Release '$TAG' not found or download failed."
+            echo "Will try artifact fallback in next step."
+          fi
+
+      - name: Fallback - Download RootFS from workflow artifact
+        if: ${{ steps.download_release.outcome != 'success' }}
         uses: actions/download-artifact@v4
         with:
           name: rootfs-aarch64
           path: /tmp/rootfs-download
+        continue-on-error: true
 
       - name: Extract and verify RootFS
         run: |
           if [ ! -f /tmp/rootfs-download/rootfs-aarch64.tar.xz ]; then
-            echo "============================================"
-            echo "ERROR: rootfs-aarch64 artifact not found."
-            echo "Please run the 'Build Components' workflow first"
-            echo "to produce the RootFS artifact, then re-run this workflow."
-            echo "============================================"
+            echo ""
+            echo "=========================================================="
+            echo "  FATAL: rootfs-aarch64.tar.xz not found"
+            echo "=========================================================="
+            echo ""
+            echo "Tried both GitHub Release and workflow artifact, both failed."
+            echo ""
+            echo "TO FIX:"
+            echo "  1. Go to GitHub Actions → 'Build Components' workflow"
+            echo "  2. Run it with release_tag='rootfs-latest' (or any tag)"
+            echo "  3. Wait ~30 min for it to publish RootFS to a Release"
+            echo "  4. Re-run THIS 'Build Wine' workflow"
+            echo ""
+            echo "OR: Run 'Build Components' in the same workflow run as"
+            echo "    'Build Wine' (if you've combined them)."
+            echo ""
+            echo "=========================================================="
             exit 1
           fi
           mkdir -p ${{ env.ROOTFS_PREFIX }}
           cd ${{ env.ROOTFS_PREFIX }}
           tar -xf /tmp/rootfs-download/rootfs-aarch64.tar.xz
-          echo "RootFS extracted. Contents:"
-          ls ${{ env.ROOTFS_PREFIX }}/lib/*.so 2>/dev/null | head -20
+          echo "RootFS extracted successfully."
+          echo "Source: ${{ env.rootfs_source || 'artifact-fallback' }}"
           echo "---"
           echo "Total .so files: $(find ${{ env.ROOTFS_PREFIX }}/lib -name '*.so' 2>/dev/null | wc -l)"
           echo "---"
-          echo "Key headers:"
-          ls ${{ env.ROOTFS_PREFIX }}/include/X11/X.h 2>/dev/null && echo "  X11: OK" || echo "  X11: MISSING"
-          ls ${{ env.ROOTFS_PREFIX }}/include/pulse/pulseaudio.h 2>/dev/null && echo "  PulseAudio: OK" || echo "  PulseAudio: MISSING"
-          ls ${{ env.ROOTFS_PREFIX }}/include/gstreamer-1.0/gst/gst.h 2>/dev/null && echo "  GStreamer: OK" || echo "  GStreamer: MISSING"
-          ls ${{ env.ROOTFS_PREFIX }}/include/gnutls/gnutls.h 2>/dev/null && echo "  GnuTLS: OK" || echo "  GnuTLS: MISSING"
+          echo "Key headers verification:"
+          for hdr in X11/X.h pulse/pulseaudio.h gstreamer-1.0/gst/gst.h gnutls/gnutls.h; do
+            if [ -f ${{ env.ROOTFS_PREFIX }}/include/$hdr ]; then
+              echo "  [OK]   $hdr"
+            else
+              echo "  [MISS] $hdr"
+            fi
+          done
 
       - name: Set NDK environment
         run: |
