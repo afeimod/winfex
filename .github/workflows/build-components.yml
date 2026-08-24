@@ -89,9 +89,14 @@ jobs:
           echo "$prefix" > "${ndkDir}/.ndk_patches_state"
           echo "NDK patches applied"
           # 验证 clang 存在
-          CLANG=$(find "${ndkDir}/toolchains/llvm/prebuilt/linux-x86_64/bin/" -name "aarch64-linux-android*-clang" | head -1)
+          CLANG=$(find "${ndkDir}/toolchains/llvm/prebuilt/linux-x86_64/bin/" -name "aarch64-linux-android*-clang" ! -name "*clang++*" | head -1)
           echo "Found clang: $CLANG"
-          [[ -z "$CLANG" ]] && { echo "ERROR: clang not found"; exit 1; }
+          if [ -z "$CLANG" ]; then
+            echo "ERROR: clang not found"
+            exit 1
+          fi
+          echo "NDK setup complete"
+          true
 
       - name: Build all packages
         run: |
