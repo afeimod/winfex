@@ -30,7 +30,8 @@ jobs:
             bzip2 xz-utils zstd libglib2.0-dev gperf python3 python3-pip \
             gobject-introspection pkg-config autoconf automake libtool \
             flex bison gettext libltdl-dev texinfo
-          pip3 install --user meson mako jinja2 pyyaml
+          # 系统自带的 meson 版本太旧，从 pip 安装最新版
+          sudo pip3 install --upgrade meson mako jinja2 pyyaml
 
       - name: Setup build environment
         run: |
