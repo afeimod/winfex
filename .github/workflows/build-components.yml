@@ -43,6 +43,11 @@ jobs:
           sed -i 's|srcDir=.*|srcDir="/home/runner/work/winfex/winfex/scripts/src"|' default.conf
           sed -i 's|pkgDir=.*|pkgDir="/home/runner/work/winfex/winfex/scripts/pkgs"|' default.conf
           sed -i 's|prefix=.*|prefix="/tmp/bionic-prefix"|' default.conf
+          # NDK r29 的 clang 是 android35，不是 android29
+          # 但参考项目用 api=29，说明 clang 名字不依赖 api 变量
+          # NDK r29 实际的 clang 是 aarch64-linux-android35-clang
+          # 修改 default.conf 让 api=35
+          sed -i 's|api=.*|api="35"|' default.conf
           cat default.conf
 
       - name: Download NDK and apply patches
