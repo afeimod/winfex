@@ -337,7 +337,7 @@ load_env_host() {
 dl_src() {
   rm -rf /tmp/download-src
   mkdir -p /tmp/download-src
-  wget --tries=3 --timeout=30 -P /tmp/download-src/ $url || {
+  wget --tries=3 --timeout=60 -P /tmp/download-src/ $url || {
     echo "下载 $url 失败"
     rm -rf /tmp/download-src
     exit 1
