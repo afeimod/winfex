@@ -34,11 +34,33 @@ jobs:
             glslang-tools libdrm-dev cmake
           sudo pip3 install --upgrade --ignore-installed meson mako pyyaml jinja2
 
+<<<<<<< HEAD
       - name: Setup NDK
         uses: nttld/setup-ndk@v1
         id: ndk
         with:
           ndk-version: r29
+=======
+      - name: Setup NDK (manual download)
+        run: |
+          wget -q "https://dl.google.com/android/repository/android-ndk-r29-linux.zip" -O /tmp/ndk.zip
+          cd /tmp && unzip -q ndk.zip -d ndk-tmp || true
+          NDK_EXTRACTED=$(ls -d /tmp/ndk-tmp/android-ndk-*)
+          mkdir -p /tmp/ndk
+          cp -a "$NDK_EXTRACTED/." /tmp/ndk/
+          # Apply NDK patches
+          cd ${{ github.workspace }}/scripts
+          NDK_SYSROOT="/tmp/ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          PREFIX="${{ env.ROOTFS_PREFIX }}"
+          for _patch in ndk_patches/r29/*.patch; do
+            cd "$NDK_SYSROOT"
+            if patch -p1 --dry-run <"$OLDPWD/$_patch" >/dev/null 2>&1; then
+              patch --no-backup-if-mismatch -N -p1 <<<"$(cat "$OLDPWD/$_patch" | sed "s|@TERMUX_PREFIX@|${PREFIX}|g" | sed "s|@TERMUX_PREFIX_CLASSICAL@|${PREFIX}|g" | sed "s|@ROOTFS_PREFIX@|${PREFIX}|g" | sed "s|__TERMUX__|__ANDROID__|g")" || true
+            fi
+            cd -
+          done
+          echo "NDK setup complete"
+>>>>>>> f74ceb3 (修复构建)
 
       - name: Download RootFS
         uses: actions/download-artifact@v4
@@ -59,14 +81,29 @@ jobs:
 
       - name: Set NDK environment
         run: |
+<<<<<<< HEAD
           NDK="${{ steps.ndk.outputs.ndk-path }}"
           TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
           CLANG=$(find "$TC/bin/" -name "aarch64-linux-android*-clang" ! -name "*++*" | head -1)
+=======
+          NDK="/tmp/ndk"
+          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          CLANG=$(find "$TC/bin/" -name "aarch64-linux-android*-clang" ! -name "*++*" | head -1)
+          if [ -z "$CLANG" ]; then
+            echo "ERROR: clang not found"
+            exit 1
+          fi
+>>>>>>> f74ceb3 (修复构建)
           echo "CC=$CLANG" >> $GITHUB_ENV
           echo "CXX=${CLANG}++" >> $GITHUB_ENV
           echo "AR=$TC/bin/llvm-ar" >> $GITHUB_ENV
           echo "STRIP=$TC/bin/llvm-strip" >> $GITHUB_ENV
           echo "SYSROOT=$TC/sysroot" >> $GITHUB_ENV
+<<<<<<< HEAD
+=======
+          echo "Found clang: $CLANG"
+          true
+>>>>>>> f74ceb3 (修复构建)
 
       - name: Clone Mesa
         run: |
