@@ -1,5 +1,5 @@
 revision="0.46.4"
-url="https://cairographics.org/releases/pixman-${revision}.tar.gz"
+url="https://gitlab.freedesktop.org/pixman/pixman/-/archive/${revision}/pixman-${revision}.tar.gz"
 urlType="tar"
 arch="aarch64 x86_64"
 buildSys="meson"

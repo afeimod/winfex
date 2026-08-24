@@ -1,6 +1,7 @@
 revision="2.4.134"
-url="https://dri.freedesktop.org/libdrm/libdrm-${revision}.tar.xz"
+url="https://gitlab.freedesktop.org/mesa/drm/-/archive/libdrm-${revision}/libdrm-libdrm-${revision}.tar.gz"
 urlType="tar"
+pkgSrcDir="${wsDir}/src/libdrm/libdrm-libdrm-${revision}"
 arch="aarch64 x86_64"
 buildSys="meson"
 # https://github.com/termux/termux-packages/blob/master/packages/libdrm/LICENSE

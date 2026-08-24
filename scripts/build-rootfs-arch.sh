@@ -337,7 +337,7 @@ load_env_host() {
 dl_src() {
   rm -rf /tmp/download-src
   mkdir -p /tmp/download-src
-  wget -P /tmp/download-src/ $url || {
+  wget --tries=3 --timeout=30 -P /tmp/download-src/ $url || {
     echo "下载 $url 失败"
     rm -rf /tmp/download-src
     exit 1
@@ -351,18 +351,18 @@ get_src() {
   guard_dev_null
   case $urlType in
   git)
-    local _gitRetries=5
+    local _gitRetries=3
     local _gitTry
     for ((_gitTry = 1; _gitTry <= _gitRetries; _gitTry++)); do
       echo "克隆 ${pjName} (第 ${_gitTry}/${_gitRetries} 次尝试)"
-      if git clone --recursive --depth=1 -b "${revision}" "${url}" $pjName; then
+      if timeout 120 git clone --recursive --depth=1 -b "${revision}" "${url}" $pjName; then
         _gitTry=0
         break
       fi
       if [[ $_gitTry -lt $_gitRetries ]]; then
         echo "源码克隆失败,5秒后重试..."
         rm -rf $pjName
-        sleep 5
+        sleep 10
       fi
     done
     if [[ $_gitTry -ne 0 ]]; then
