@@ -14,3 +14,6 @@ args="
   -DENABLE_CPACK=OFF
 "
 deps="mpg123 mp3lame  libogg libvorbis libopus libflac"
+pre_setup() {
+  export PKG_CONFIG_PATH="${prefix}/lib/pkgconfig:${prefix}/share/pkgconfig"
+}
