@@ -31,27 +31,48 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             python3 python3-pip meson ninja-build pkg-config \
-            glslang-tools libdrm-dev cmake
+            glslang-tools libdrm-dev cmake \
+            unzip ca-certificates xz-utils
           sudo pip3 install --upgrade --ignore-installed meson mako pyyaml jinja2
 
       - name: Setup NDK (manual download)
         run: |
+          set -e
           wget -q "https://dl.google.com/android/repository/android-ndk-r29-linux.zip" -O /tmp/ndk.zip
-          cd /tmp && unzip -q ndk.zip -d ndk-tmp || true
-          NDK_EXTRACTED=$(ls -d /tmp/ndk-tmp/android-ndk-*)
+          ls -lh /tmp/ndk.zip
+          rm -rf /tmp/ndk-tmp /tmp/ndk
+          mkdir -p /tmp/ndk-tmp
+          unzip -q /tmp/ndk.zip -d /tmp/ndk-tmp
+          NDK_EXTRACTED=$(ls -d /tmp/ndk-tmp/android-ndk-* | head -1)
+          if [ -z "$NDK_EXTRACTED" ]; then
+            echo "ERROR: NDK extraction failed - directory not found"
+            ls -la /tmp/ndk-tmp/
+            exit 1
+          fi
+          echo "NDK extracted to: $NDK_EXTRACTED"
           mkdir -p /tmp/ndk
           cp -a "$NDK_EXTRACTED/." /tmp/ndk/
-          # Apply NDK patches
-          cd ${{ github.workspace }}/scripts
-          NDK_SYSROOT="/tmp/ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          PREFIX="${{ env.ROOTFS_PREFIX }}"
-          for _patch in ndk_patches/r29/*.patch; do
-            cd "$NDK_SYSROOT"
-            if patch -p1 --dry-run <"$OLDPWD/$_patch" >/dev/null 2>&1; then
-              patch --no-backup-if-mismatch -N -p1 <<<"$(cat "$OLDPWD/$_patch" | sed "s|@TERMUX_PREFIX@|${PREFIX}|g" | sed "s|@TERMUX_PREFIX_CLASSICAL@|${PREFIX}|g" | sed "s|@ROOTFS_PREFIX@|${PREFIX}|g" | sed "s|__TERMUX__|__ANDROID__|g")" || true
-            fi
-            cd -
-          done
+          # 验证 clang 存在
+          TC="/tmp/ndk/toolchains/llvm/prebuilt/linux-x86_64"
+          if [ ! -d "$TC/bin" ]; then
+            echo "ERROR: NDK toolchain bin directory not found at $TC/bin"
+            find /tmp/ndk -maxdepth 5 -type d -name bin 2>/dev/null
+            exit 1
+          fi
+          CLANG=$(find "$TC/bin/" -name "aarch64-linux-android*-clang" ! -name "*++*" | head -1)
+          if [ -z "$CLANG" ]; then
+            echo "ERROR: aarch64 clang not found in $TC/bin/"
+            ls "$TC/bin/" | grep -E '^(aarch64|arm)' | head -20
+            exit 1
+          fi
+          echo "Found clang: $CLANG"
+          # 创建通用名称的符号链接
+          ln -sf "$CLANG" "$TC/bin/aarch64-linux-android-clang"
+          ln -sf "${CLANG}++" "$TC/bin/aarch64-linux-android-clang++"
+          ln -sf "$TC/bin/llvm-ar" "$TC/bin/aarch64-linux-android-ar"
+          ln -sf "$TC/bin/llvm-ranlib" "$TC/bin/aarch64-linux-android-ranlib"
+          ln -sf "$TC/bin/llvm-strip" "$TC/bin/aarch64-linux-android-strip"
+          ln -sf "$TC/bin/llvm-nm" "$TC/bin/aarch64-linux-android-nm"
           echo "NDK setup complete"
 
       - name: Download RootFS
@@ -75,18 +96,72 @@ jobs:
         run: |
           NDK="/tmp/ndk"
           TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
-          CLANG=$(find "$TC/bin/" -name "aarch64-linux-android*-clang" ! -name "*++*" | head -1)
-          if [ -z "$CLANG" ]; then
-            echo "ERROR: clang not found"
+          CLANG="$TC/bin/aarch64-linux-android-clang"
+          if [ ! -x "$CLANG" ]; then
+            echo "ERROR: clang not found at $CLANG"
+            ls "$TC/bin/" | head -20
             exit 1
           fi
           echo "CC=$CLANG" >> $GITHUB_ENV
           echo "CXX=${CLANG}++" >> $GITHUB_ENV
           echo "AR=$TC/bin/llvm-ar" >> $GITHUB_ENV
           echo "STRIP=$TC/bin/llvm-strip" >> $GITHUB_ENV
+          echo "NM=$TC/bin/llvm-nm" >> $GITHUB_ENV
           echo "SYSROOT=$TC/sysroot" >> $GITHUB_ENV
+          echo "NDK=$NDK" >> $GITHUB_ENV
+          echo "PATH=$TC/bin:$PATH" >> $GITHUB_ENV
           echo "Found clang: $CLANG"
+          # 验证工具链
+          for tool in clang clang++ llvm-ar llvm-strip; do
+            if [ ! -x "$TC/bin/$tool" ]; then
+              echo "ERROR: $tool not found at $TC/bin/"
+              exit 1
+            fi
+          done
+          echo "All toolchain binaries verified"
           true
+
+      - name: Apply NDK patches
+        run: |
+          set -e
+          cd ${{ github.workspace }}/scripts
+          NDK_SYSROOT="${{ env.SYSROOT }}"
+          PREFIX="${{ env.ROOTFS_PREFIX }}"
+          APPLIED=0
+          SKIPPED=0
+          FAILED=0
+          for _patch in ndk_patches/r29/*.patch; do
+            [ -f "$_patch" ] || continue
+            cd "$NDK_SYSROOT"
+            if patch -p1 --dry-run <"$OLDPWD/$_patch" >/dev/null 2>&1; then
+              patch --no-backup-if-mismatch -N -p1 <<<"$(cat "$OLDPWD/$_patch" | sed "s|@TERMUX_PREFIX@|${PREFIX}|g" | sed "s|@TERMUX_PREFIX_CLASSICAL@|${PREFIX}|g" | sed "s|@ROOTFS_PREFIX@|${PREFIX}|g" | sed "s|__TERMUX__|__ANDROID__|g")" && APPLIED=$((APPLIED+1)) || { echo "WARN: patch failed => $_patch"; FAILED=$((FAILED+1)); }
+            else
+              SKIPPED=$((SKIPPED+1))
+            fi
+            cd -
+          done
+          echo "NDK patches: applied=$APPLIED skipped=$SKIPPED failed=$FAILED"
+
+      - name: Provide android_lf.h stub for Termux-patched subprojects
+        run: |
+          # Mesa 拉取的 libarchive 是 Termux 补丁过的版本，会 #include "android_lf.h"
+          # 这是 Termux 的 libandroid-support 包提供的头文件。
+          # 现代 NDK r29 的 bionic 已完整支持 localeconv()/setlocale() 等，
+          # 因此提供一个最小 stub 即可让 libarchive 编译通过。
+          PREFIX="${{ env.ROOTFS_PREFIX }}"
+          mkdir -p "${PREFIX}/include"
+          cat > "${PREFIX}/include/android_lf.h" <<'STUB_EOF'
+          /* Stub android_lf.h for Termux-patched libarchive on modern Android NDK */
+          #ifndef ANDROID_LF_H
+          #define ANDROID_LF_H
+          #include <locale.h>
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #endif /* ANDROID_LF_H */
+          STUB_EOF
+          echo "Created ${PREFIX}/include/android_lf.h:"
+          cat "${PREFIX}/include/android_lf.h"
 
       - name: Clone Mesa
         run: |
@@ -129,6 +204,23 @@ jobs:
           export LDFLAGS="-L${PREFIX}/lib"
 
           cd /tmp/mesa-src
+          # 删除可能存在的 Termux-patched wraps，让 meson 使用上游 wrapdb
+          # 但保留必要的 wrap（如 libarchive 用于 shader cache）
+          # 如果 libarchive.wrap 指向 Termux fork，替换为上游 URL
+          if [ -f subprojects/libarchive.wrap ]; then
+            echo "=== Original libarchive.wrap ==="
+            cat subprojects/libarchive.wrap
+            # 检查是否是 Termux fork（包含 termux 或 tukaani.org 的源 URL）
+            if grep -qi 'termux' subprojects/libarchive.wrap 2>/dev/null; then
+              echo "WARNING: libarchive.wrap appears to be Termux-patched. Leaving it as-is."
+              echo "Relying on android_lf.h stub to fix compilation."
+            fi
+          fi
+          # 如果已存在 Termux-patched libarchive 源码，删除让 meson 重新拉取
+          rm -rf subprojects/libarchive-3.*/
+          # 如果有已下载的 termux-patched 源码包，也删除
+          rm -rf subprojects/packagecache/libarchive-*
+
           meson setup /tmp/mesa-build \
             --prefix=${PREFIX} \
             --cross-file /tmp/cross-aarch64-android.ini \

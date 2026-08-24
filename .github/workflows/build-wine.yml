@@ -45,30 +45,54 @@ jobs:
             libxcomposite-dev libgstreamer1.0-dev \
             libpulse-dev libgnutls28-dev libxcursor-dev \
             libxi-dev libxxf86vm-dev libxfixes-dev \
-            pkg-config autoconf automake libtool gettext
+            pkg-config autoconf automake libtool gettext \
+            unzip ca-certificates xz-utils
           # MinGW for PE 编译（Wine 的 Windows DLL 部分）
           sudo apt-get install -y --no-install-recommends mingw-w64
 
       - name: Setup NDK (manual download)
         run: |
+          set -e
           wget -q "https://dl.google.com/android/repository/android-ndk-r29-linux.zip" -O /tmp/ndk.zip
-          cd /tmp && unzip -q ndk.zip -d ndk-tmp || true
-          NDK_EXTRACTED=$(ls -d /tmp/ndk-tmp/android-ndk-*)
+          ls -lh /tmp/ndk.zip
+          rm -rf /tmp/ndk-tmp /tmp/ndk
+          mkdir -p /tmp/ndk-tmp
+          unzip -q /tmp/ndk.zip -d /tmp/ndk-tmp
+          NDK_EXTRACTED=$(ls -d /tmp/ndk-tmp/android-ndk-* | head -1)
+          if [ -z "$NDK_EXTRACTED" ]; then
+            echo "ERROR: NDK extraction failed - directory not found"
+            ls -la /tmp/ndk-tmp/
+            exit 1
+          fi
+          echo "NDK extracted to: $NDK_EXTRACTED"
           mkdir -p /tmp/ndk
           cp -a "$NDK_EXTRACTED/." /tmp/ndk/
-          # Apply NDK patches
-          cd ${{ github.workspace }}/scripts
-          NDK_SYSROOT="/tmp/ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          PREFIX="${{ env.ROOTFS_PREFIX }}"
-          for _patch in ndk_patches/r29/*.patch; do
-            cd "$NDK_SYSROOT"
-            if patch -p1 --dry-run <"$OLDPWD/$_patch" >/dev/null 2>&1; then
-              patch --no-backup-if-mismatch -N -p1 <<<"$(cat "$OLDPWD/$_patch" | sed "s|@TERMUX_PREFIX@|${PREFIX}|g" | sed "s|@TERMUX_PREFIX_CLASSICAL@|${PREFIX}|g" | sed "s|@ROOTFS_PREFIX@|${PREFIX}|g" | sed "s|__TERMUX__|__ANDROID__|g")" || true
-            fi
-            cd -
-          done
-          echo "/tmp/ndk" > /tmp/ndk-path.txt
-          echo "NDK setup complete"
+          # 验证 clang 存在
+          TC="/tmp/ndk/toolchains/llvm/prebuilt/linux-x86_64"
+          if [ ! -d "$TC/bin" ]; then
+            echo "ERROR: NDK toolchain bin directory not found at $TC/bin"
+            find /tmp/ndk -maxdepth 5 -type d -name bin 2>/dev/null
+            exit 1
+          fi
+          CLANG=$(find "$TC/bin/" -name "aarch64-linux-android*-clang" ! -name "*++*" | head -1)
+          if [ -z "$CLANG" ]; then
+            echo "ERROR: aarch64 clang not found in $TC/bin/"
+            ls "$TC/bin/" | grep -E '^(aarch64|arm)' | head -20
+            exit 1
+          fi
+          echo "Found clang: $CLANG"
+          # 创建通用名称的符号链接，方便 configure 查找
+          API_NUM=$(basename "$CLANG" | grep -oP 'android-\K\d+')
+          ln -sf "$CLANG" "$TC/bin/aarch64-linux-android-clang"
+          ln -sf "${CLANG}++" "$TC/bin/aarch64-linux-android-clang++"
+          ln -sf "$TC/bin/llvm-ar" "$TC/bin/aarch64-linux-android-ar"
+          ln -sf "$TC/bin/llvm-ranlib" "$TC/bin/aarch64-linux-android-ranlib"
+          ln -sf "$TC/bin/llvm-strip" "$TC/bin/aarch64-linux-android-strip"
+          ln -sf "$TC/bin/llvm-nm" "$TC/bin/aarch64-linux-android-nm"
+          ln -sf "$TC/bin/llvm-objcopy" "$TC/bin/aarch64-linux-android-objcopy"
+          ln -sf "$TC/bin/llvm-objdump" "$TC/bin/aarch64-linux-android-objdump"
+          echo "API_NUM=$API_NUM" >> $GITHUB_ENV
+          echo "NDK setup complete with API $API_NUM"
 
       - name: Download RootFS
         uses: actions/download-artifact@v4
@@ -94,35 +118,54 @@ jobs:
         run: |
           NDK="/tmp/ndk"
           TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
-          CLANG=$(find "$TC/bin/" -name "aarch64-linux-android*-clang" ! -name "*++*" | head -1)
-          if [ -z "$CLANG" ]; then
-            echo "ERROR: clang not found"
+          CLANG="$TC/bin/aarch64-linux-android-clang"
+          if [ ! -x "$CLANG" ]; then
+            echo "ERROR: clang not found at $CLANG"
             ls "$TC/bin/" | head -20
             exit 1
           fi
-          API=$(echo "$CLANG" | grep -oP 'android-\K\d+')
+          API="${{ env.API_NUM }}"
           echo "CC=$CLANG" >> $GITHUB_ENV
           echo "CXX=${CLANG}++" >> $GITHUB_ENV
           echo "AR=$TC/bin/llvm-ar" >> $GITHUB_ENV
           echo "RANLIB=$TC/bin/llvm-ranlib" >> $GITHUB_ENV
           echo "STRIP=$TC/bin/llvm-strip" >> $GITHUB_ENV
+          echo "NM=$TC/bin/llvm-nm" >> $GITHUB_ENV
           echo "API=$API" >> $GITHUB_ENV
           echo "SYSROOT=$TC/sysroot" >> $GITHUB_ENV
+          echo "NDK=$NDK" >> $GITHUB_ENV
+          echo "PATH=$TC/bin:$PATH" >> $GITHUB_ENV
           echo "Found clang: $CLANG (API $API)"
+          # 验证工具链
+          for tool in clang clang++ llvm-ar llvm-ranlib llvm-strip; do
+            if [ ! -x "$TC/bin/$tool" ]; then
+              echo "ERROR: $tool not found at $TC/bin/"
+              exit 1
+            fi
+          done
+          echo "All toolchain binaries verified"
           true
 
       - name: Apply NDK patches
         run: |
+          set -e
           cd ${{ github.workspace }}/scripts
           NDK_SYSROOT="${{ env.SYSROOT }}"
           PREFIX="${{ env.ROOTFS_PREFIX }}"
+          APPLIED=0
+          SKIPPED=0
+          FAILED=0
           for _patch in ndk_patches/r29/*.patch; do
+            [ -f "$_patch" ] || continue
             cd "$NDK_SYSROOT"
             if patch -p1 --dry-run <"$OLDPWD/$_patch" >/dev/null 2>&1; then
-              patch --no-backup-if-mismatch -N -p1 <<<"$(cat "$OLDPWD/$_patch" | sed "s|@TERMUX_PREFIX@|${PREFIX}|g" | sed "s|@TERMUX_PREFIX_CLASSICAL@|${PREFIX}|g" | sed "s|@ROOTFS_PREFIX@|${PREFIX}|g" | sed "s|__TERMUX__|__ANDROID__|g")" || true
+              patch --no-backup-if-mismatch -N -p1 <<<"$(cat "$OLDPWD/$_patch" | sed "s|@TERMUX_PREFIX@|${PREFIX}|g" | sed "s|@TERMUX_PREFIX_CLASSICAL@|${PREFIX}|g" | sed "s|@ROOTFS_PREFIX@|${PREFIX}|g" | sed "s|__TERMUX__|__ANDROID__|g")" && APPLIED=$((APPLIED+1)) || { echo "WARN: patch failed => $_patch"; FAILED=$((FAILED+1)); }
+            else
+              SKIPPED=$((SKIPPED+1))
             fi
             cd -
           done
+          echo "NDK patches: applied=$APPLIED skipped=$SKIPPED failed=$FAILED"
 
       # ============================================================
       # 构建 Wine 普通版 (wine-wow64-arm64)
