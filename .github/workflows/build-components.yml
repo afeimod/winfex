@@ -31,7 +31,7 @@ jobs:
             gobject-introspection pkg-config autoconf automake libtool \
             flex bison gettext libltdl-dev texinfo
           # 系统自带的 meson 版本太旧，从 pip 安装最新版
-          sudo pip3 install --upgrade meson mako jinja2 pyyaml
+          sudo pip3 install --upgrade --ignore-installed meson mako jinja2 pyyaml
 
       - name: Setup build environment
         run: |
