@@ -11,14 +11,15 @@ args="
   -DFLAC_BUILD_TESTS=OFF
   -DFLAC_BUILD_DOCS=OFF
   -DINSTALL_MANPAGES=OFF
-  -DWITH_ICONV=OFF
   -DOGG_INCLUDE_DIR=${prefix}/include
   -DOGG_LIBRARY=${prefix}/lib/libogg.so
   -DCMAKE_FIND_ROOT_PATH=${prefix}
+  -DICONV_INCLUDE_DIR=${prefix}/include
+  -DICONV_LIBRARY=${prefix}/lib/libiconv.so
 "
-deps="libogg"
+deps="libogg libiconv"
 
 pre_setup() {
   export PKG_CONFIG_PATH="${prefix}/lib/pkgconfig:${prefix}/share/pkgconfig"
-  LDFLAGS+=" -liconv"
+  LDFLAGS+=" -L${prefix}/lib -liconv"
 }
