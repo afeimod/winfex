@@ -190,12 +190,18 @@ jobs:
         run: |
           cd /tmp/wine-src
           mkdir -p build-tools && cd build-tools
+          # 关键：wine-tools 必须用 host GCC 编译（不是 NDK clang）
+          # NDK clang 产生 ARM64 二进制，无法在 x86_64 host 上运行
+          unset CC CXX AR RANLIB STRIP
+          export CC=gcc
+          export CXX=g++
           ../configure --enable-win64 --without-x
           make -j$(nproc) __tooldeps__ nls/all
 
       - name: Configure Wine (ARM64 WOW64)
         run: |
           PREFIX="${{ env.ROOTFS_PREFIX }}"
+          # 交叉编译：使用 NDK clang
           export CC="${{ env.CC }}"
           export CXX="${{ env.CXX }}"
           export AR="${{ env.AR }}"
@@ -278,6 +284,10 @@ jobs:
         run: |
           cd /tmp/proton-wine-src
           mkdir -p build-tools && cd build-tools
+          # 关键：wine-tools 必须用 host GCC 编译（不是 NDK clang）
+          unset CC CXX AR RANLIB STRIP
+          export CC=gcc
+          export CXX=g++
           ../configure --enable-win64 --without-x
           make -j$(nproc) __tooldeps__ nls/all
 

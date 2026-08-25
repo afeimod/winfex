@@ -147,56 +147,6 @@ jobs:
           done
           echo "NDK patches applied"
 
-      # ============================================================
-      # 提供 Android 兼容头文件 stub
-      # ============================================================
-      - name: Provide Android compat header stubs
-        run: |
-          PREFIX="${{ env.ROOTFS_PREFIX }}"
-          mkdir -p "${PREFIX}/include/cutils"
-
-          # android_lf.h — Termux-patched libarchive 需要
-          python3 -c "
-          import sys
-          prefix = sys.argv[1]
-          content = '''/* Stub android_lf.h */
-          #ifndef ANDROID_LF_H
-          #define ANDROID_LF_H
-          #include <locale.h>
-          #include <stdio.h>
-          #include <stdlib.h>
-          #include <string.h>
-          #endif
-          '''
-          with open(prefix + '/include/android_lf.h', 'w') as f:
-              f.write(content)
-          " "$PREFIX"
-          echo "Created android_lf.h"
-
-          # cutils/trace.h — Mesa src/util/perf/cpu_trace.h 在 __ANDROID__ 时包含
-          # NDK r29 已移除此头文件，提供空 stub
-          python3 -c "
-          import sys
-          prefix = sys.argv[1]
-          content = '''/* Stub cutils/trace.h - removed from NDK r29 */
-          #ifndef _CUTILS_TRACE_H
-          #define _CUTILS_TRACE_H
-          #include <stdint.h>
-          static inline void atrace_begin(uint64_t tag, const char *name) { (void)tag; (void)name; }
-          static inline void atrace_end(uint64_t tag) { (void)tag; }
-          static inline void atrace_int64(uint64_t tag, const char *name, int64_t val) { (void)tag; (void)name; (void)val; }
-          static inline void atrace_int(uint64_t tag, const char *name, int32_t val) { (void)tag; (void)name; (void)val; }
-          #define ATRACE_TAG_GRAPHICS 1ULL
-          #define ATRACE_TAG_ALWAYS 0
-          #endif
-          '''
-          with open(prefix + '/include/cutils/trace.h', 'w') as f:
-              f.write(content)
-          " "$PREFIX"
-          echo "Created cutils/trace.h"
-
-          ls -la "${PREFIX}/include/android_lf.h" "${PREFIX}/include/cutils/trace.h"
-
       - name: Clone Mesa
         run: |
           git clone --depth 1 --branch ${{ inputs.mesa_version }} https://gitlab.freedesktop.org/mesa/mesa.git /tmp/mesa-src
@@ -219,8 +169,8 @@ jobs:
           endian = 'little'
 
           [built-in options]
-          c_args = ['-fPIC', '-O2', '-D__ANDROID__', '-I${PREFIX}/include']
-          cpp_args = ['-fPIC', '-O2', '-D__ANDROID__', '-I${PREFIX}/include']
+          c_args = ['-fPIC', '-O2', '-I${PREFIX}/include']
+          cpp_args = ['-fPIC', '-O2', '-I${PREFIX}/include']
           c_link_args = ['-L${PREFIX}/lib']
           cpp_link_args = ['-L${PREFIX}/lib']
 
@@ -233,7 +183,11 @@ jobs:
         run: |
           PREFIX="${{ env.ROOTFS_PREFIX }}"
           export PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig:${PREFIX}/share/pkgconfig"
-          export CFLAGS="-fPIC -O2 -D__ANDROID__ -I${PREFIX}/include"
+          # 关键：不要加 -D__ANDROID__
+          # Mesa 源码在 __ANDROID__ 定义时会 #include Android 系统头文件
+          # (cutils/trace.h, log/log.h 等)，这些在 NDK r29 中已移除。
+          # Turnip 驱动通过 KGSL/MSM 内核 ioctl 与 GPU 通信，不需要 Android API。
+          export CFLAGS="-fPIC -O2 -I${PREFIX}/include"
           export CXXFLAGS="$CFLAGS"
           export LDFLAGS="-L${PREFIX}/lib"
 
