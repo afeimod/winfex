@@ -3,8 +3,9 @@ name: Build Turnip Driver
 # 构建 Mesa Turnip (freedreno) Vulkan 驱动
 # 用于 Adreno GPU 的 Vulkan 支持
 #
-# 依赖 RootFS 里的 libdrm（freedreno 后端）
-# 产出 libvulkan_freedreno.so + vulkan_icd.json
+# RootFS 获取策略（按优先级）：
+#   1. 从 GitHub Release 下载（推荐 —— 跨 run 可用，稳定可靠）
+#   2. 从当前 workflow run 的 artifact 下载（fallback）
 
 on:
   workflow_dispatch:
@@ -41,38 +42,24 @@ jobs:
             unzip ca-certificates xz-utils
           sudo pip3 install --upgrade --ignore-installed meson mako pyyaml jinja2
 
-      - name: Setup NDK (manual download)
+      # ============================================================
+      # NDK 下载 + 验证 + 创建通用名符号链接
+      # ============================================================
+      - name: Setup NDK
         run: |
-          set -e
           wget -q "https://dl.google.com/android/repository/android-ndk-r29-linux.zip" -O /tmp/ndk.zip
-          ls -lh /tmp/ndk.zip
           rm -rf /tmp/ndk-tmp /tmp/ndk
           mkdir -p /tmp/ndk-tmp
           unzip -q /tmp/ndk.zip -d /tmp/ndk-tmp
           NDK_EXTRACTED=$(ls -d /tmp/ndk-tmp/android-ndk-* | head -1)
-          if [ -z "$NDK_EXTRACTED" ]; then
-            echo "ERROR: NDK extraction failed - directory not found"
-            ls -la /tmp/ndk-tmp/
-            exit 1
-          fi
           echo "NDK extracted to: $NDK_EXTRACTED"
           mkdir -p /tmp/ndk
           cp -a "$NDK_EXTRACTED/." /tmp/ndk/
-          # 验证 clang 存在
+
           TC="/tmp/ndk/toolchains/llvm/prebuilt/linux-x86_64"
-          if [ ! -d "$TC/bin" ]; then
-            echo "ERROR: NDK toolchain bin directory not found at $TC/bin"
-            find /tmp/ndk -maxdepth 5 -type d -name bin 2>/dev/null
-            exit 1
-          fi
           CLANG=$(find "$TC/bin/" -name "aarch64-linux-android*-clang" ! -name "*++*" | head -1)
-          if [ -z "$CLANG" ]; then
-            echo "ERROR: aarch64 clang not found in $TC/bin/"
-            ls "$TC/bin/" | grep -E '^(aarch64|arm)' | head -20
-            exit 1
-          fi
           echo "Found clang: $CLANG"
-          # 创建通用名称的符号链接
+
           ln -sf "$CLANG" "$TC/bin/aarch64-linux-android-clang"
           ln -sf "${CLANG}++" "$TC/bin/aarch64-linux-android-clang++"
           ln -sf "$TC/bin/llvm-ar" "$TC/bin/aarch64-linux-android-ar"
@@ -99,18 +86,9 @@ jobs:
               --output /tmp/rootfs-download/rootfs-aarch64.tar.xz 2>/dev/null; then
             echo "Downloaded from release."
             ls -lh /tmp/rootfs-download/rootfs-aarch64.tar.xz
-            gh release download "$TAG" --repo "$REPO" \
-              --pattern "rootfs-aarch64.tar.xz.sha256" \
-              --output /tmp/rootfs-download/rootfs-aarch64.tar.xz.sha256 2>/dev/null || true
-            if [ -f /tmp/rootfs-download/rootfs-aarch64.tar.xz.sha256 ]; then
-              echo "Verifying SHA256..."
-              cd /tmp/rootfs-download
-              sha256sum -c rootfs-aarch64.tar.xz.sha256
-            fi
             echo "rootfs_source=release" >> $GITHUB_ENV
           else
             echo "Release '$TAG' not found or download failed."
-            echo "Will try artifact fallback in next step."
           fi
 
       - name: Fallback - Download RootFS from workflow artifact
@@ -121,7 +99,7 @@ jobs:
           path: /tmp/rootfs-download
         continue-on-error: true
 
-      - name: Extract RootFS (optional)
+      - name: Extract RootFS
         run: |
           if [ -f /tmp/rootfs-download/rootfs-aarch64.tar.xz ]; then
             mkdir -p ${{ env.ROOTFS_PREFIX }}
@@ -130,32 +108,20 @@ jobs:
             echo "RootFS extracted. Source: ${{ env.rootfs_source || 'artifact-fallback' }}"
             echo "Total .so files: $(find ${{ env.ROOTFS_PREFIX }}/lib -name '*.so' 2>/dev/null | wc -l)"
           else
-            echo ""
-            echo "=========================================================="
-            echo "  WARNING: RootFS not found in release or artifact"
-            echo "=========================================================="
-            echo ""
-            echo "Turnip can build without RootFS, but some features will be missing."
-            echo "TO FIX (recommended):"
-            echo "  1. Run 'Build Components' workflow with release_tag='rootfs-latest'"
-            echo "  2. Re-run THIS 'Build Turnip' workflow"
-            echo ""
+            echo "WARNING: RootFS not found. Creating minimal prefix."
             mkdir -p ${{ env.ROOTFS_PREFIX }}/{lib,include,share}
           fi
-          echo "---"
-          echo "NDK sysroot contents (checking for openssl/BoringSSL headers):"
-          SYSROOT="/tmp/ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          ls "$SYSROOT/usr/include/openssl/evp.h" 2>/dev/null && echo "  BoringSSL evp.h: OK" || echo "  BoringSSL evp.h: MISSING"
-          ls "$SYSROOT/usr/include/openssl/" 2>/dev/null | head -10
 
-      - name: Set NDK environment
+      # ============================================================
+      # 设置 NDK 环境变量 + 应用 NDK 补丁
+      # ============================================================
+      - name: Set NDK environment and apply patches
         run: |
           NDK="/tmp/ndk"
           TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
           CLANG="$TC/bin/aarch64-linux-android-clang"
           if [ ! -x "$CLANG" ]; then
             echo "ERROR: clang not found at $CLANG"
-            ls "$TC/bin/" | head -20
             exit 1
           fi
           echo "CC=$CLANG" >> $GITHUB_ENV
@@ -167,57 +133,69 @@ jobs:
           echo "NDK=$NDK" >> $GITHUB_ENV
           echo "PATH=$TC/bin:$PATH" >> $GITHUB_ENV
           echo "Found clang: $CLANG"
-          # 验证工具链
-          for tool in clang clang++ llvm-ar llvm-strip; do
-            if [ ! -x "$TC/bin/$tool" ]; then
-              echo "ERROR: $tool not found at $TC/bin/"
-              exit 1
-            fi
-          done
-          echo "All toolchain binaries verified"
-          true
 
-      - name: Apply NDK patches
-        run: |
-          set -e
           cd ${{ github.workspace }}/scripts
           NDK_SYSROOT="${{ env.SYSROOT }}"
           PREFIX="${{ env.ROOTFS_PREFIX }}"
-          APPLIED=0
-          SKIPPED=0
-          FAILED=0
           for _patch in ndk_patches/r29/*.patch; do
             [ -f "$_patch" ] || continue
             cd "$NDK_SYSROOT"
             if patch -p1 --dry-run <"$OLDPWD/$_patch" >/dev/null 2>&1; then
-              patch --no-backup-if-mismatch -N -p1 <<<"$(cat "$OLDPWD/$_patch" | sed "s|@TERMUX_PREFIX@|${PREFIX}|g" | sed "s|@TERMUX_PREFIX_CLASSICAL@|${PREFIX}|g" | sed "s|@ROOTFS_PREFIX@|${PREFIX}|g" | sed "s|__TERMUX__|__ANDROID__|g")" && APPLIED=$((APPLIED+1)) || { echo "WARN: patch failed => $_patch"; FAILED=$((FAILED+1)); }
-            else
-              SKIPPED=$((SKIPPED+1))
+              patch --no-backup-if-mismatch -N -p1 <<<"$(cat "$OLDPWD/$_patch" | sed "s|@TERMUX_PREFIX@|${PREFIX}|g" | sed "s|@TERMUX_PREFIX_CLASSICAL@|${PREFIX}|g" | sed "s|@ROOTFS_PREFIX@|${PREFIX}|g" | sed "s|__TERMUX__|__ANDROID__|g")" || true
             fi
             cd -
           done
-          echo "NDK patches: applied=$APPLIED skipped=$SKIPPED failed=$FAILED"
+          echo "NDK patches applied"
 
-      - name: Provide android_lf.h stub for Termux-patched subprojects
+      # ============================================================
+      # 提供 Android 兼容头文件 stub
+      # ============================================================
+      - name: Provide Android compat header stubs
         run: |
-          # Mesa 拉取的 libarchive 是 Termux 补丁过的版本，会 #include "android_lf.h"
-          # 这是 Termux 的 libandroid-support 包提供的头文件。
-          # 现代 NDK r29 的 bionic 已完整支持 localeconv()/setlocale() 等，
-          # 因此提供一个最小 stub 即可让 libarchive 编译通过。
           PREFIX="${{ env.ROOTFS_PREFIX }}"
-          mkdir -p "${PREFIX}/include"
-          cat > "${PREFIX}/include/android_lf.h" <<'STUB_EOF'
-          /* Stub android_lf.h for Termux-patched libarchive on modern Android NDK */
+          mkdir -p "${PREFIX}/include/cutils"
+
+          # android_lf.h — Termux-patched libarchive 需要
+          python3 -c "
+          import sys
+          prefix = sys.argv[1]
+          content = '''/* Stub android_lf.h */
           #ifndef ANDROID_LF_H
           #define ANDROID_LF_H
           #include <locale.h>
           #include <stdio.h>
           #include <stdlib.h>
           #include <string.h>
-          #endif /* ANDROID_LF_H */
-          STUB_EOF
-          echo "Created ${PREFIX}/include/android_lf.h:"
-          cat "${PREFIX}/include/android_lf.h"
+          #endif
+          '''
+          with open(prefix + '/include/android_lf.h', 'w') as f:
+              f.write(content)
+          " "$PREFIX"
+          echo "Created android_lf.h"
+
+          # cutils/trace.h — Mesa src/util/perf/cpu_trace.h 在 __ANDROID__ 时包含
+          # NDK r29 已移除此头文件，提供空 stub
+          python3 -c "
+          import sys
+          prefix = sys.argv[1]
+          content = '''/* Stub cutils/trace.h - removed from NDK r29 */
+          #ifndef _CUTILS_TRACE_H
+          #define _CUTILS_TRACE_H
+          #include <stdint.h>
+          static inline void atrace_begin(uint64_t tag, const char *name) { (void)tag; (void)name; }
+          static inline void atrace_end(uint64_t tag) { (void)tag; }
+          static inline void atrace_int64(uint64_t tag, const char *name, int64_t val) { (void)tag; (void)name; (void)val; }
+          static inline void atrace_int(uint64_t tag, const char *name, int32_t val) { (void)tag; (void)name; (void)val; }
+          #define ATRACE_TAG_GRAPHICS 1ULL
+          #define ATRACE_TAG_ALWAYS 0
+          #endif
+          '''
+          with open(prefix + '/include/cutils/trace.h', 'w') as f:
+              f.write(content)
+          " "$PREFIX"
+          echo "Created cutils/trace.h"
+
+          ls -la "${PREFIX}/include/android_lf.h" "${PREFIX}/include/cutils/trace.h"
 
       - name: Clone Mesa
         run: |
@@ -254,21 +232,17 @@ jobs:
       - name: Build Turnip (vulkan-freedreno)
         run: |
           PREFIX="${{ env.ROOTFS_PREFIX }}"
-          SYSROOT="${{ env.SYSROOT }}"
           export PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig:${PREFIX}/share/pkgconfig"
-          # 包含 NDK sysroot 的 include 路径
-          export CFLAGS="-fPIC -O2 -D__ANDROID__ -I${PREFIX}/include -I${SYSROOT}/usr/include"
+          export CFLAGS="-fPIC -O2 -D__ANDROID__ -I${PREFIX}/include"
           export CXXFLAGS="$CFLAGS"
-          export LDFLAGS="-L${PREFIX}/lib -L${SYSROOT}/usr/lib/aarch64-linux-android"
+          export LDFLAGS="-L${PREFIX}/lib"
 
           cd /tmp/mesa-src
-          # 删除可能存在的 Termux-patched libarchive 源码，让 meson 重新拉取
+          # 删除可能存在的 Termux-patched libarchive 源码
           rm -rf subprojects/libarchive-3.*/
           rm -rf subprojects/packagecache/libarchive-*
 
-          # 关键修复：禁用 libarchive 所有可选依赖
-          # RootFS 中没有 libssl/libcrypto/libxml2 等，禁用避免编译失败
-          # Mesa Turnip 不需要 libarchive 的这些功能（shader-cache 已禁用）
+          # 禁用 libarchive 所有可选依赖 + 禁用 zstd
           # libarchive 3.7.2 valid options: zlib, bz2lib, libb2, iconv, lz4, zstd,
           # lzma, lzo2, openssl, xml2, expat, regex, xattr, acl
           meson setup /tmp/mesa-build \

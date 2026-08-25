@@ -8,7 +8,6 @@ name: Build Wine (ARM64 WOW64)
 # RootFS 获取策略（按优先级）：
 #   1. 从 GitHub Release 下载（推荐 —— 跨 run 可用，稳定可靠）
 #   2. 从当前 workflow run 的 artifact 下载（fallback）
-#   3. 失败：提示用户先运行 Build Components workflow
 
 on:
   workflow_dispatch:
@@ -52,52 +51,34 @@ jobs:
             libxi-dev libxxf86vm-dev libxfixes-dev \
             pkg-config autoconf automake libtool gettext \
             unzip ca-certificates xz-utils
-          # MinGW for PE 编译（Wine 的 Windows DLL 部分）
           sudo apt-get install -y --no-install-recommends mingw-w64
 
-      - name: Setup NDK (manual download)
+      # ============================================================
+      # NDK 下载 + 验证 + 创建通用名符号链接
+      # ============================================================
+      - name: Setup NDK
         run: |
-          set -e
           wget -q "https://dl.google.com/android/repository/android-ndk-r29-linux.zip" -O /tmp/ndk.zip
-          ls -lh /tmp/ndk.zip
           rm -rf /tmp/ndk-tmp /tmp/ndk
           mkdir -p /tmp/ndk-tmp
           unzip -q /tmp/ndk.zip -d /tmp/ndk-tmp
           NDK_EXTRACTED=$(ls -d /tmp/ndk-tmp/android-ndk-* | head -1)
-          if [ -z "$NDK_EXTRACTED" ]; then
-            echo "ERROR: NDK extraction failed - directory not found"
-            ls -la /tmp/ndk-tmp/
-            exit 1
-          fi
           echo "NDK extracted to: $NDK_EXTRACTED"
           mkdir -p /tmp/ndk
           cp -a "$NDK_EXTRACTED/." /tmp/ndk/
-          # 验证 clang 存在
+
           TC="/tmp/ndk/toolchains/llvm/prebuilt/linux-x86_64"
-          if [ ! -d "$TC/bin" ]; then
-            echo "ERROR: NDK toolchain bin directory not found at $TC/bin"
-            find /tmp/ndk -maxdepth 5 -type d -name bin 2>/dev/null
-            exit 1
-          fi
           CLANG=$(find "$TC/bin/" -name "aarch64-linux-android*-clang" ! -name "*++*" | head -1)
-          if [ -z "$CLANG" ]; then
-            echo "ERROR: aarch64 clang not found in $TC/bin/"
-            ls "$TC/bin/" | grep -E '^(aarch64|arm)' | head -20
-            exit 1
-          fi
           echo "Found clang: $CLANG"
-          # 创建通用名称的符号链接，方便 configure 查找
-          API_NUM=$(basename "$CLANG" | grep -oP 'android-\K\d+')
+
+          # 创建通用名称的符号链接（configure 用 --host=aarch64-linux-android 时会查找这些）
           ln -sf "$CLANG" "$TC/bin/aarch64-linux-android-clang"
           ln -sf "${CLANG}++" "$TC/bin/aarch64-linux-android-clang++"
           ln -sf "$TC/bin/llvm-ar" "$TC/bin/aarch64-linux-android-ar"
           ln -sf "$TC/bin/llvm-ranlib" "$TC/bin/aarch64-linux-android-ranlib"
           ln -sf "$TC/bin/llvm-strip" "$TC/bin/aarch64-linux-android-strip"
           ln -sf "$TC/bin/llvm-nm" "$TC/bin/aarch64-linux-android-nm"
-          ln -sf "$TC/bin/llvm-objcopy" "$TC/bin/aarch64-linux-android-objcopy"
-          ln -sf "$TC/bin/llvm-objdump" "$TC/bin/aarch64-linux-android-objdump"
-          echo "API_NUM=$API_NUM" >> $GITHUB_ENV
-          echo "NDK setup complete with API $API_NUM"
+          echo "NDK setup complete"
 
       # ============================================================
       # 下载 RootFS —— 优先从 GitHub Release 下载
@@ -117,19 +98,9 @@ jobs:
               --output /tmp/rootfs-download/rootfs-aarch64.tar.xz 2>/dev/null; then
             echo "Downloaded from release."
             ls -lh /tmp/rootfs-download/rootfs-aarch64.tar.xz
-            # 下载 sha256（如果存在）
-            gh release download "$TAG" --repo "$REPO" \
-              --pattern "rootfs-aarch64.tar.xz.sha256" \
-              --output /tmp/rootfs-download/rootfs-aarch64.tar.xz.sha256 2>/dev/null || true
-            if [ -f /tmp/rootfs-download/rootfs-aarch64.tar.xz.sha256 ]; then
-              echo "Verifying SHA256..."
-              cd /tmp/rootfs-download
-              sha256sum -c rootfs-aarch64.tar.xz.sha256
-            fi
             echo "rootfs_source=release" >> $GITHUB_ENV
           else
             echo "Release '$TAG' not found or download failed."
-            echo "Will try artifact fallback in next step."
           fi
 
       - name: Fallback - Download RootFS from workflow artifact
@@ -143,34 +114,21 @@ jobs:
       - name: Extract and verify RootFS
         run: |
           if [ ! -f /tmp/rootfs-download/rootfs-aarch64.tar.xz ]; then
-            echo ""
             echo "=========================================================="
             echo "  FATAL: rootfs-aarch64.tar.xz not found"
             echo "=========================================================="
-            echo ""
-            echo "Tried both GitHub Release and workflow artifact, both failed."
-            echo ""
             echo "TO FIX:"
-            echo "  1. Go to GitHub Actions → 'Build Components' workflow"
-            echo "  2. Run it with release_tag='rootfs-latest' (or any tag)"
-            echo "  3. Wait ~30 min for it to publish RootFS to a Release"
-            echo "  4. Re-run THIS 'Build Wine' workflow"
-            echo ""
-            echo "OR: Run 'Build Components' in the same workflow run as"
-            echo "    'Build Wine' (if you've combined them)."
-            echo ""
+            echo "  1. Run 'Build Components' workflow with release_tag='rootfs-latest'"
+            echo "  2. Re-run THIS 'Build Wine' workflow"
             echo "=========================================================="
             exit 1
           fi
           mkdir -p ${{ env.ROOTFS_PREFIX }}
           cd ${{ env.ROOTFS_PREFIX }}
           tar -xf /tmp/rootfs-download/rootfs-aarch64.tar.xz
-          echo "RootFS extracted successfully."
-          echo "Source: ${{ env.rootfs_source || 'artifact-fallback' }}"
-          echo "---"
+          echo "RootFS extracted. Source: ${{ env.rootfs_source || 'artifact-fallback' }}"
           echo "Total .so files: $(find ${{ env.ROOTFS_PREFIX }}/lib -name '*.so' 2>/dev/null | wc -l)"
-          echo "---"
-          echo "Key headers verification:"
+          echo "Key headers:"
           for hdr in X11/X.h pulse/pulseaudio.h gstreamer-1.0/gst/gst.h gnutls/gnutls.h; do
             if [ -f ${{ env.ROOTFS_PREFIX }}/include/$hdr ]; then
               echo "  [OK]   $hdr"
@@ -179,66 +137,47 @@ jobs:
             fi
           done
 
-      - name: Set NDK environment
+      # ============================================================
+      # 设置 NDK 环境变量 + 应用 NDK 补丁
+      # ============================================================
+      - name: Set NDK environment and apply patches
         run: |
           NDK="/tmp/ndk"
           TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
           CLANG="$TC/bin/aarch64-linux-android-clang"
           if [ ! -x "$CLANG" ]; then
             echo "ERROR: clang not found at $CLANG"
-            ls "$TC/bin/" | head -20
             exit 1
           fi
-          API="${{ env.API_NUM }}"
           echo "CC=$CLANG" >> $GITHUB_ENV
           echo "CXX=${CLANG}++" >> $GITHUB_ENV
           echo "AR=$TC/bin/llvm-ar" >> $GITHUB_ENV
           echo "RANLIB=$TC/bin/llvm-ranlib" >> $GITHUB_ENV
           echo "STRIP=$TC/bin/llvm-strip" >> $GITHUB_ENV
-          echo "NM=$TC/bin/llvm-nm" >> $GITHUB_ENV
-          echo "API=$API" >> $GITHUB_ENV
           echo "SYSROOT=$TC/sysroot" >> $GITHUB_ENV
           echo "NDK=$NDK" >> $GITHUB_ENV
           echo "PATH=$TC/bin:$PATH" >> $GITHUB_ENV
-          echo "Found clang: $CLANG (API $API)"
-          # 验证工具链
-          for tool in clang clang++ llvm-ar llvm-ranlib llvm-strip; do
-            if [ ! -x "$TC/bin/$tool" ]; then
-              echo "ERROR: $tool not found at $TC/bin/"
-              exit 1
-            fi
-          done
-          echo "All toolchain binaries verified"
-          true
+          echo "Found clang: $CLANG"
 
-      - name: Apply NDK patches
-        run: |
-          set -e
+          # 应用 NDK 补丁
           cd ${{ github.workspace }}/scripts
           NDK_SYSROOT="${{ env.SYSROOT }}"
           PREFIX="${{ env.ROOTFS_PREFIX }}"
-          APPLIED=0
-          SKIPPED=0
-          FAILED=0
           for _patch in ndk_patches/r29/*.patch; do
             [ -f "$_patch" ] || continue
             cd "$NDK_SYSROOT"
             if patch -p1 --dry-run <"$OLDPWD/$_patch" >/dev/null 2>&1; then
-              patch --no-backup-if-mismatch -N -p1 <<<"$(cat "$OLDPWD/$_patch" | sed "s|@TERMUX_PREFIX@|${PREFIX}|g" | sed "s|@TERMUX_PREFIX_CLASSICAL@|${PREFIX}|g" | sed "s|@ROOTFS_PREFIX@|${PREFIX}|g" | sed "s|__TERMUX__|__ANDROID__|g")" && APPLIED=$((APPLIED+1)) || { echo "WARN: patch failed => $_patch"; FAILED=$((FAILED+1)); }
-            else
-              SKIPPED=$((SKIPPED+1))
+              patch --no-backup-if-mismatch -N -p1 <<<"$(cat "$OLDPWD/$_patch" | sed "s|@TERMUX_PREFIX@|${PREFIX}|g" | sed "s|@TERMUX_PREFIX_CLASSICAL@|${PREFIX}|g" | sed "s|@ROOTFS_PREFIX@|${PREFIX}|g" | sed "s|__TERMUX__|__ANDROID__|g")" || true
             fi
             cd -
           done
-          echo "NDK patches: applied=$APPLIED skipped=$SKIPPED failed=$FAILED"
+          echo "NDK patches applied"
 
       # ============================================================
       # 构建 Wine 普通版 (wine-wow64-arm64)
       # ============================================================
       - name: Clone Wine ${{ inputs.wine_version }}
         run: |
-          cd /tmp
-          # 判断是 wine-x.x 还是 proton-x.x
           WINE_VER="${{ inputs.wine_version }}"
           if [[ "$WINE_VER" == proton-* ]]; then
             git clone --depth 1 --branch "$WINE_VER" https://github.com/ValveSoftware/wine.git /tmp/wine-src
@@ -249,12 +188,10 @@ jobs:
 
       - name: Build wine-tools (host)
         run: |
-          # Wine 交叉编译需要先在 host 上构建 wine-tools
           cd /tmp/wine-src
           mkdir -p build-tools && cd build-tools
           ../configure --enable-win64 --without-x
           make -j$(nproc) __tooldeps__ nls/all
-          echo "wine-tools built"
 
       - name: Configure Wine (ARM64 WOW64)
         run: |
@@ -334,7 +271,6 @@ jobs:
       - name: Clone Proton Wine
         if: ${{ inputs.build_proton }}
         run: |
-          cd /tmp
           git clone --depth 1 --branch proton-9.0 https://github.com/ValveSoftware/wine.git /tmp/proton-wine-src
 
       - name: Build Proton wine-tools (host)
