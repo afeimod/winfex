@@ -220,34 +220,45 @@ jobs:
           rm -rf subprojects/libarchive-3.*/
           rm -rf subprojects/packagecache/libarchive-*
 
-          # 禁用 libarchive 所有可选依赖 + 禁用 zstd
-          # libarchive 3.7.2 valid options: zlib, bz2lib, libb2, iconv, lz4, zstd,
-          # lzma, lzo2, openssl, xml2, expat, regex, xattr, acl
+          # 只构建 Turnip Vulkan 驱动，禁用其他所有功能
+          # 不能用参考 build-mesa.yml 的选项（gles/glx/egl/llvm/gallium-drivers=zink 等）
+          # 那些需要 host 原生库（LLVM/X11），交叉编译时不可用
+          # Mesa 25.x 已移除 mediafoundation-codecs 和 gallium-extra-hud 选项
           meson setup /tmp/mesa-build \
             --prefix=${PREFIX} \
             --cross-file /tmp/cross-aarch64-android.ini \
-            -Dplatforms=x11 \
-           -Dbuildtype=release \
-           -Degl-native-platform=x11 \
-           -Dvulkan-beta=true \
-           -Dgallium-extra-hud=true \
-           -Dgallium-drivers=freedreno,zink \
-           -Dmediafoundation-codecs=all \
-           -Dvulkan-drivers=freedreno \
-           -Dfreedreno-kmds=kgsl \
-           -Dshader-cache=enabled \
-           -Dgles1=enabled \
-           -Dgles2=enabled \
-           -Dopengl=true \
-           -Dgbm=enabled \
-           -Dglx=dri \
-           -Degl=enabled \
-           -Dglvnd=enabled \
-           -Dmicrosoft-clc=disabled \
-           -Dllvm=enabled \
-           -Dshared-llvm=enabled \
-           -Dvulkan-beta=true \
-           -Dvideo-codecs=all
+            -Dbuildtype=release \
+            -Dgallium-drivers= \
+            -Dvulkan-drivers=freedreno \
+            -Dfreedreno-kmds=kgsl \
+            -Dglvnd=disabled \
+            -Dplatforms= \
+            -Dllvm=disabled \
+            -Dopengl=false \
+            -Degl=disabled \
+            -Dgbm=disabled \
+            -Dgles1=disabled \
+            -Dgles2=disabled \
+            -Dglx=disabled \
+            -Dzstd=disabled \
+            -Dshader-cache=disabled \
+            -Dvideo-codecs= \
+            -Dmicrosoft-clc=disabled \
+            -Dvulkan-beta=false \
+            -Dlibarchive:openssl=disabled \
+            -Dlibarchive:xml2=disabled \
+            -Dlibarchive:expat=disabled \
+            -Dlibarchive:iconv=disabled \
+            -Dlibarchive:libb2=disabled \
+            -Dlibarchive:regex=disabled \
+            -Dlibarchive:lz4=disabled \
+            -Dlibarchive:zstd=disabled \
+            -Dlibarchive:lzma=disabled \
+            -Dlibarchive:lzo2=disabled \
+            -Dlibarchive:bz2lib=disabled \
+            -Dlibarchive:zlib=disabled \
+            -Dlibarchive:xattr=disabled \
+            -Dlibarchive:acl=disabled
 
           meson compile -C /tmp/mesa-build
           meson install -C /tmp/mesa-build
