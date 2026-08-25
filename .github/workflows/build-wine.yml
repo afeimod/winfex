@@ -238,37 +238,21 @@ jobs:
           ../configure \
             --host=aarch64-linux-android \
             --prefix=${PREFIX}/opt/wine-wow64-arm64 \
-            --enable-archs=arm64ec,aarch64,i386,x86_64 \
             --with-wine-tools=/tmp/wine-src/build-tools \
-            --without-oss \
-            --disable-winemenubuilder \
-            --disable-win16 \
             --disable-tests \
             --with-x \
             --x-libraries=${PREFIX}/lib \
             --x-includes=${PREFIX}/include \
-            --with-pulse \
+            --with-mingw=clang \
+            --enable-archs=arm64ec,aarch64,i386 \
+            --enable-tools \
+            --with-vulkan \
             --with-gstreamer \
-            --with-opengl \
-            --with-gnutls \
-            --with-mingw \
-            --enable-nls \
-            --without-xshm \
-            --without-xxf86vm \
-            --without-osmesa \
-            --without-usb \
-            --without-sdl \
-            --without-wayland \
-            --without-cups \
-            --without-netapi \
-            --without-pcap \
-            --without-gphoto \
-            --without-v4l2 \
-            --without-pcsclite \
-            --without-opencl \
-            --without-dbus \
-            --without-sane \
-            --without-udev
+            --host=aarch64-linux-gnu \
+            host_alias=aarch64-linux-gnu \
+            build_alias=x86_64-linux-gnu \
+            --with-wine-tools=/opt/wine64-native \
+            CC=aarch64-linux-gnu-gcc
 
       - name: Build Wine
         run: |

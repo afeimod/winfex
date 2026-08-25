@@ -226,30 +226,28 @@ jobs:
           meson setup /tmp/mesa-build \
             --prefix=${PREFIX} \
             --cross-file /tmp/cross-aarch64-android.ini \
-            -Dgallium-drivers= \
-            -Dvulkan-drivers=freedreno \
-            -Dfreedreno-kmds=msm,kgsl \
-            -Dglvnd=disabled \
-            -Dplatforms= \
-            -Dllvm=disabled \
-            -Dopengl=false \
-            -Degl=disabled \
-            -Dzstd=disabled \
-            -Dshader-cache=disabled \
-            -Dlibarchive:openssl=disabled \
-            -Dlibarchive:xml2=disabled \
-            -Dlibarchive:expat=disabled \
-            -Dlibarchive:iconv=disabled \
-            -Dlibarchive:libb2=disabled \
-            -Dlibarchive:regex=disabled \
-            -Dlibarchive:lz4=disabled \
-            -Dlibarchive:zstd=disabled \
-            -Dlibarchive:lzma=disabled \
-            -Dlibarchive:lzo2=disabled \
-            -Dlibarchive:bz2lib=disabled \
-            -Dlibarchive:zlib=disabled \
-            -Dlibarchive:xattr=disabled \
-            -Dlibarchive:acl=disabled
+            -Dplatforms=x11 \
+           -Dbuildtype=release \
+           -Degl-native-platform=x11 \
+           -Dvulkan-beta=true \
+           -Dgallium-extra-hud=true \
+           -Dgallium-drivers=freedreno,zink \
+           -Dmediafoundation-codecs=all \
+           -Dvulkan-drivers=freedreno \
+           -Dfreedreno-kmds=kgsl \
+           -Dshader-cache=enabled \
+           -Dgles1=enabled \
+           -Dgles2=enabled \
+           -Dopengl=true \
+           -Dgbm=enabled \
+           -Dglx=dri \
+           -Degl=enabled \
+           -Dglvnd=enabled \
+           -Dmicrosoft-clc=disabled \
+           -Dllvm=enabled \
+           -Dshared-llvm=enabled \
+           -Dvulkan-beta=true \
+           -Dvideo-codecs=all
 
           meson compile -C /tmp/mesa-build
           meson install -C /tmp/mesa-build
