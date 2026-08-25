@@ -50,8 +50,26 @@ jobs:
             libpulse-dev libgnutls28-dev libxcursor-dev \
             libxi-dev libxxf86vm-dev libxfixes-dev \
             pkg-config autoconf automake libtool gettext \
-            unzip ca-certificates xz-utils
-          sudo apt-get install -y --no-install-recommends mingw-w64
+            unzip ca-certificates xz-utils wget
+
+          # 关键：系统 mingw-w64 不支持 arm64ec target
+          # 必须用 llvm-mingw（基于 LLVM 的 MinGW，支持所有 Windows 架构包括 arm64ec）
+          # 下载最新预编译版本（mstorsjo/llvm-mingw 提供 UCRT Ubuntu 版本）
+          LLVM_MINGW_TAG=$(curl -sL "https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest" | python3 -c "import json,sys; print(json.load(sys.stdin)['tag_name'])")
+          echo "Using llvm-mingw tag: $LLVM_MINGW_TAG"
+          wget -q "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_TAG}/llvm-mingw-${LLVM_MINGW_TAG}-ucrt-ubuntu-22.04-x86_64.tar.xz" -O /tmp/llvm-mingw.tar.xz
+          ls -lh /tmp/llvm-mingw.tar.xz
+          mkdir -p /tmp/llvm-mingw
+          tar -xf /tmp/llvm-mingw.tar.xz -C /tmp/llvm-mingw --strip-components=1
+          # 添加到 PATH（让 Wine configure 能找到 arm64ec-w64-mingw32-clang）
+          echo "/tmp/llvm-mingw/bin" >> $GITHUB_PATH
+          # 验证 arm64ec 编译器存在
+          echo "=== Verifying llvm-mingw compilers ==="
+          ls /tmp/llvm-mingw/bin/aarch64-w64-mingw32-clang
+          ls /tmp/llvm-mingw/bin/arm64ec-w64-mingw32-clang 2>/dev/null && echo "arm64ec-w64-mingw32-clang: OK" || echo "arm64ec-w64-mingw32 not found (Wine will use -target arm64ec-windows)"
+          ls /tmp/llvm-mingw/bin/i686-w64-mingw32-clang
+          ls /tmp/llvm-mingw/bin/x86_64-w64-mingw32-clang
+          echo "LLVM_MINGW=/tmp/llvm-mingw" >> $GITHUB_ENV
 
       # ============================================================
       # NDK 下载 + 验证 + 创建通用名符号链接
@@ -210,6 +228,9 @@ jobs:
           export CXXFLAGS="$CFLAGS"
           export LDFLAGS="-L${PREFIX}/lib -landroid-shmem"
           export PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig:${PREFIX}/share/pkgconfig"
+          # MinGW 交叉编译器（用于 PE 编译，支持 arm64ec）
+          export CROSS_CFLAGS="-target arm64ec-windows -fuse-ld=lld -Wl,-subsystem:console -Wl,-WX"
+          export CROSSTARGET="arm64ec-windows"
 
           cd /tmp/wine-src
           mkdir -p build-arm64 && cd build-arm64
@@ -303,6 +324,9 @@ jobs:
           export CXXFLAGS="$CFLAGS"
           export LDFLAGS="-L${PREFIX}/lib -landroid-shmem"
           export PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig:${PREFIX}/share/pkgconfig"
+          # MinGW 交叉编译器（用于 PE 编译，支持 arm64ec）
+          export CROSS_CFLAGS="-target arm64ec-windows -fuse-ld=lld -Wl,-subsystem:console -Wl,-WX"
+          export CROSSTARGET="arm64ec-windows"
 
           cd /tmp/proton-wine-src
           mkdir -p build-arm64 && cd build-arm64

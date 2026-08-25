@@ -147,6 +147,30 @@ jobs:
           done
           echo "NDK patches applied"
 
+      - name: Provide android_lf.h stub
+        run: |
+          # wrapdb 的 libarchive 3.7.2-3 patch 无条件 #include "android_lf.h"
+          # （Termux 补丁遗留），需要提供 stub
+          PREFIX="${{ env.ROOTFS_PREFIX }}"
+          mkdir -p "${PREFIX}/include"
+          python3 -c "
+          import sys
+          prefix = sys.argv[1]
+          content = '''/* Stub android_lf.h - modern bionic has full locale support */
+          #ifndef ANDROID_LF_H
+          #define ANDROID_LF_H
+          #include <locale.h>
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #endif
+          '''
+          with open(prefix + '/include/android_lf.h', 'w') as f:
+              f.write(content)
+          " "$PREFIX"
+          echo "Created android_lf.h"
+          cat "${PREFIX}/include/android_lf.h"
+
       - name: Clone Mesa
         run: |
           git clone --depth 1 --branch ${{ inputs.mesa_version }} https://gitlab.freedesktop.org/mesa/mesa.git /tmp/mesa-src
